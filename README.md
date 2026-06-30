@@ -1,5 +1,7 @@
 # energy-stack
 
+![Proudly Vibe Coded - Neon Flame](https://vibecoded.fyi/badges/flat/main/proudly-vibe-coded-neon-flame.svg)
+
 Docker + Home Assistant automation that runs **EMHASS** model-predictive control on a home battery using **Zonneplan** dynamic electricity prices, with optional **Sigenergy Remote EMS** execution.
 
 Licensed under the [MIT License](LICENSE).
@@ -22,10 +24,10 @@ P1 meter + Envoy PV (HA) → house load / PV templates ───→ EMHASS input
 Sigenergy (Modbus/MQTT) ← optional Remote EMS ←────────── HA scripts
 ```
 
-| Component | Role |
-|-----------|------|
+| Component                              | Role                                                                                      |
+| -------------------------------------- | ----------------------------------------------------------------------------------------- |
 | **Energy host** (`ENERGY_REMOTE_HOST`) | Docker: EMHASS, price/MPC cron, health monitor, Mosquitto, P1 MQTT bridge, sigenergy2mqtt |
-| **Home Assistant** (`HA_SSH_HOST`) | Zonneplan HACS, EMHASS REST sensors, trading dashboard, EMS scripts, entity-level alerts |
+| **Home Assistant** (`HA_SSH_HOST`)     | Zonneplan HACS, EMHASS REST sensors, trading dashboard, EMS scripts, entity-level alerts  |
 
 Site-specific hosts, entity IDs, and Modbus targets live in gitignored `config/site.env`. HA package YAML is rendered from those values at deploy time.
 
