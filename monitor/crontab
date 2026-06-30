@@ -1,0 +1,2 @@
+# Energy host health → HA notify.notify (every 10 min)
+*/10 * * * * python3 /app/health_notify.py

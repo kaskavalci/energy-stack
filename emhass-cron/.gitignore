@@ -1,0 +1,4 @@
+token
+cron.log
+*.pyc
+__pycache__/

@@ -1,0 +1,11 @@
+# Copy to sigenergy/sigenergy2mqtt.yaml (gitignored). Rendered by setup-local.sh from site.env.
+# See https://github.com/seud0nym/sigenergy2mqtt
+
+modbus:
+  host: __SIGENERGY_MODBUS_HOST__
+  port: 502
+  slave: __SIGENERGY_MODBUS_SLAVE__
+
+mqtt:
+  host: mosquitto
+  port: 1883

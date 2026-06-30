@@ -1,0 +1,152 @@
+title: EMHASS & Sigen
+views:
+  - title: Trading
+    path: emhass-trading
+    icon: mdi:solar-power-variant-outline
+    cards:
+      - type: entities
+        title: Status
+        entities:
+          - entity: sensor.optim_status
+          - entity: binary_sensor.emhass_plan_valid
+          - entity: binary_sensor.emhass_control_allowed
+          - entity: input_boolean.emhass_auto_control_master
+          - entity: input_select.emhass_ems_mode_native
+          - entity: input_number.emhass_soc_min
+          - entity: input_number.emhass_soc_max
+          - entity: sensor.emhass_plan_active_step
+          - type: attribute
+            entity: binary_sensor.emhass_control_allowed
+            attribute: p_batt_age_min
+            name: Plan age (min)
+
+
+      - type: entities
+        title: Active step (first row only)
+        entities:
+          - entity: sensor.p_batt_forecast
+            name: Battery power forecast
+          - entity: sensor.emhass_batt_charge_power_w
+            name: Sigen charge cap (if charging)
+          - entity: sensor.emhass_batt_discharge_power_w
+            name: Sigen discharge cap (if discharging)
+          - entity: sensor.p_grid_forecast
+            name: Grid power forecast
+          - entity: sensor.p_load_forecast
+            name: Load forecast
+          - entity: sensor.p_pv_forecast
+            name: PV power forecast
+          - entity: sensor.soc_batt_forecast
+            name: SOC after this step
+          - entity: sensor.unit_load_cost
+            name: Import price this step
+
+      - type: entities
+        title: Prices
+        entities:
+          - entity: sensor.unit_load_cost
+          - entity: sensor.unit_prod_price
+          - entity: sensor.emhass_price_rank_now
+
+      - type: entities
+        title: PV — model vs actual
+        entities:
+          - entity: sensor.p_pv_forecast
+            name: EMHASS forecast (active step)
+          - entity: __ENVOY_PV_ENTITY__
+            name: Enphase Envoy (live)
+          - entity: sensor.emhass_pv_power_w
+            name: Envoy in W (HA feed)
+
+      - type: entities
+        title: Actual (Sigen / P1)
+        entities:
+          - entity: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
+          - entity: sensor.__SIGEN_PLANT_SLUG___plant_battery_power
+          - entity: __P1_POWER_NET_ENTITY__
+            name: P1 grid net (+ import, − export)
+          - entity: sensor.emhass_house_load_power_w
+            name: Derived house load
+          - entity: __P1_POWER_CONSUMPTION_ENTITY__
+            name: P1 gross import
+          - entity: __P1_POWER_PRODUCTION_ENTITY__
+            name: P1 gross export
+          - entity: sensor.net_electricity_today
+            name: P1 net energy today (kWh)
+
+      - type: history-graph
+        title: P1 grid/load vs EMHASS plan step (24 h)
+        hours_to_show: 24
+        entities:
+          - entity: __P1_POWER_NET_ENTITY__
+          - entity: sensor.p_grid_forecast
+          - entity: sensor.emhass_house_load_power_w
+          - entity: sensor.p_load_forecast
+
+      - type: history-graph
+        title: Plan vs battery (24 h)
+        hours_to_show: 24
+        entities:
+          - entity: sensor.p_batt_forecast
+          - entity: sensor.__SIGEN_PLANT_SLUG___plant_battery_power
+
+      - type: history-graph
+        title: PV forecast vs Envoy (24 h)
+        hours_to_show: 24
+        entities:
+          - entity: sensor.p_pv_forecast
+          - entity: sensor.emhass_pv_power_w
+
+      - type: history-graph
+        title: Import price (published steps)
+        hours_to_show: 48
+        entities:
+          - entity: sensor.unit_load_cost
+
+      - type: markdown
+        title: Upcoming plan (MPC horizon)
+        entity_id:
+          - sensor.p_batt_forecast
+          - sensor.p_pv_forecast
+          - sensor.p_grid_forecast
+          - sensor.soc_batt_forecast
+          - sensor.unit_load_cost
+        content: >
+          {%- set batt = state_attr('sensor.p_batt_forecast', 'battery_scheduled_power') or [] -%}
+          {%- set pv_f = state_attr('sensor.p_pv_forecast', 'forecasts') or [] -%}
+          {%- set grid_f = state_attr('sensor.p_grid_forecast', 'forecasts') or [] -%}
+          {%- set soc_f = state_attr('sensor.soc_batt_forecast', 'battery_scheduled_soc') or [] -%}
+          {%- set price_f = state_attr('sensor.unit_load_cost', 'unit_load_cost_forecasts') or [] -%}
+          {%- if batt | length == 0 -%}
+          <p><em>No plan rows yet — MPC runs at :00 and :30 on the energy host.</em></p>
+          {%- else -%}
+          <table width="100%">
+          <thead>
+          <tr>
+          <th>From</th>
+          <th align="right">PV W</th>
+          <th>Battery</th>
+          <th>Grid</th>
+          <th align="right">SOC %</th>
+          <th align="right">€/kWh</th>
+          </tr>
+          </thead>
+          <tbody>
+          {%- for row in batt -%}
+          {%- set ts = row.date -%}
+          {%- set p = row.p_batt_forecast | float(0) -%}
+          {%- set ns = namespace(pv='—', gr='—', soc='—', pr='—') -%}
+          {%- for x in pv_f %}{% if x.date == ts %}{% set ns.pv = x.p_pv_forecast %}{% endif %}{% endfor -%}
+          {%- for x in grid_f %}{% if x.date == ts %}{% set ns.gr = x.p_grid_forecast %}{% endif %}{% endfor -%}
+          {%- for x in soc_f %}{% if x.date == ts %}{% set ns.soc = x.soc_batt_forecast %}{% endif %}{% endfor -%}
+          {%- for x in price_f %}{% if x.date == ts %}{% set ns.pr = x.unit_load_cost %}{% endif %}{% endfor -%}
+          {%- set t = (ts | string)[11:16] -%}
+          {%- if p < -500 %}{% set btxt = 'chg ' ~ ((-p) | int) ~ ' W' %}{% elif p > 500 %}{% set btxt = 'dis ' ~ (p | int) ~ ' W' %}{% else %}{% set btxt = 'idle' %}{% endif -%}
+          {%- set g = ns.gr | float(none) -%}
+          {%- if g is not none and g > 50 %}{% set gtxt = (g | int) ~ ' W in' %}{% elif g is not none and g < -50 %}{% set gtxt = (g | abs | int) ~ ' W out' %}{% elif g is not none %}{% set gtxt = '≈0' %}{% else %}{% set gtxt = '—' %}{% endif -%}
+          <tr><td><strong>{{ t }}</strong></td><td align="right">{{ ns.pv }}</td><td>{{ btxt }}</td><td>{{ gtxt }}</td><td align="right">{{ ns.soc }}</td><td align="right">{{ ns.pr }}</td></tr>
+          {%- endfor -%}
+          </tbody>
+          </table>
+          <p><small>chg = charge · dis = discharge · W in = grid import · W out = grid export</small></p>
+          {%- endif -%}

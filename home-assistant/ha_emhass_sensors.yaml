@@ -1,0 +1,82 @@
+# Site entities (rendered from config/site.env at deploy):
+#   ENVOY_PV_ENTITY, SIGEN_PLANT_SLUG, P1_POWER_NET_ENTITY
+# EMHASS inputs: Envoy reports kW; EMHASS retrieve expects W (no unit conversion).
+# Envoy freshness uses raw entity last_updated — not emhass_pv_power_w (template can self-refresh).
+template:
+  - sensor:
+      - name: EMHASS PV power
+        unique_id: emhass_pv_power_w
+        default_entity_id: sensor.emhass_pv_power_w
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set raw_envoy = '__ENVOY_PV_ENTITY__' %}
+          {% set sun_up = is_state('sun.sun', 'above_horizon') %}
+          {% set raw = states[raw_envoy] %}
+          {% set bad = ['unknown', 'unavailable', 'none', ''] %}
+          {% set envoy_bad = states(raw_envoy) in bad %}
+          {% set envoy_stale = raw is none
+             or (now() - raw.last_updated).total_seconds() > 20 * 60 %}
+          {% set raw_pv_w = states(raw_envoy) | float(0) * 1000 %}
+          {{ 0 if (not sun_up and (envoy_stale or envoy_bad)) else raw_pv_w | round(0) }}
+        availability: >
+          {% set raw_envoy = '__ENVOY_PV_ENTITY__' %}
+          {% set sun_up = is_state('sun.sun', 'above_horizon') %}
+          {% set raw = states[raw_envoy] %}
+          {% set bad = ['unknown', 'unavailable', 'none', ''] %}
+          {% set envoy_bad = states(raw_envoy) in bad %}
+          {% set envoy_stale = raw is none
+             or (now() - raw.last_updated).total_seconds() > 20 * 60 %}
+          {% if not sun_up %}
+            true
+          {% else %}
+            {{ not (envoy_bad or envoy_stale) }}
+          {% endif %}
+
+      - name: EMHASS house load power
+        unique_id: emhass_house_load_power_w
+        default_entity_id: sensor.emhass_house_load_power_w
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set raw_envoy = '__ENVOY_PV_ENTITY__' %}
+          {% set sun_up = is_state('sun.sun', 'above_horizon') %}
+          {% set raw = states[raw_envoy] %}
+          {% set bad = ['unknown', 'unavailable', 'none', ''] %}
+          {% set envoy_bad = states(raw_envoy) in bad %}
+          {% set envoy_stale = raw is none
+             or (now() - raw.last_updated).total_seconds() > 20 * 60 %}
+          {% set raw_pv_w = states(raw_envoy) | float(0) * 1000 %}
+          {% set pv = 0 if (not sun_up and (envoy_stale or envoy_bad)) else raw_pv_w %}
+          {% set grid = states('__P1_POWER_NET_ENTITY__') | float(0) %}
+          {% set batt = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_power') | float(0) %}
+          {{ [grid + pv - batt, 0] | max | round(0) }}
+        availability: >
+          {% set stale_after_s = 20 * 60 %}
+          {% set bad = ['unknown', 'unavailable', 'none', ''] %}
+          {% set raw_envoy = '__ENVOY_PV_ENTITY__' %}
+          {% set sun_up = is_state('sun.sun', 'above_horizon') %}
+          {% set raw_e = states[raw_envoy] %}
+          {% set envoy_bad = states(raw_envoy) in bad %}
+          {% set envoy_stale = raw_e is none
+             or (now() - raw_e.last_updated).total_seconds() > stale_after_s %}
+          {% set raw_pv_w = states(raw_envoy) | float(0) * 1000 %}
+          {% set envoy_required = sun_up or raw_pv_w > 50 %}
+          {% set ns = namespace(ok=true) %}
+          {% for entity_id in [
+            '__P1_POWER_NET_ENTITY__',
+            'sensor.__SIGEN_PLANT_SLUG___plant_battery_power',
+          ] %}
+            {% set entity = states[entity_id] %}
+            {% if entity is none
+                  or entity.state in bad
+                  or (now() - entity.last_updated).total_seconds() > stale_after_s %}
+              {% set ns.ok = false %}
+            {% endif %}
+          {% endfor %}
+          {% if envoy_required and (envoy_bad or envoy_stale) %}
+            {% set ns.ok = false %}
+          {% endif %}
+          {{ ns.ok }}

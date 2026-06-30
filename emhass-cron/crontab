@@ -1,0 +1,6 @@
+# Zonneplan prices via HA on each MPC run (Europe/Amsterdam)
+# Daily Open-Meteo refresh when stale (05:05 avoids :00 MPC race)
+5 5 * * * python3 /app/fetch_prices_emhass.py --action refresh-weather
+
+# Policy A MPC: HA prices -> Open-Meteo cache -> naive-mpc-optim -> publish-data
+*/30 * * * * python3 /app/fetch_prices_emhass.py --action mpc

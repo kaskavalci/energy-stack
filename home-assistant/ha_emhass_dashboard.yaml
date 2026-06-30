@@ -1,0 +1,175 @@
+# EMHASS trading observability: templates, optional price freshness, alerts.
+# Lovelace UI: dashboards/emhass_trading.yaml (registered in configuration.yaml).
+
+# Optional: enable after SSH from HA to energy host works (see docs/SETUP.md).
+# command_line:
+#   - sensor:
+#       name: EMHASS prices fetched at
+#       unique_id: emhass_prices_fetched_at
+#       command: >-
+#         ssh -i /config/.ssh/id_rsa -o StrictHostKeyChecking=no -o ConnectTimeout=5
+#         ENERGY_REMOTE_HOST from config/site.env
+#         cat ENERGY_REMOTE_DIR/emhass/share/prices_fetched_at.txt
+#       value_template: "{{ value | trim }}"
+#       scan_interval: 3600
+
+template:
+  - sensor:
+      - name: EMHASS batt charge power
+        unique_id: emhass_batt_charge_power_w
+        default_entity_id: sensor.emhass_batt_charge_power_w
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set p = states('sensor.p_batt_forecast') | float(0) %}
+          {{ ([-p, 0] | max) | round(0) }}
+
+      - name: EMHASS batt discharge power
+        unique_id: emhass_batt_discharge_power_w
+        default_entity_id: sensor.emhass_batt_discharge_power_w
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set p = states('sensor.p_batt_forecast') | float(0) %}
+          {{ ([p, 0] | max) | round(0) }}
+
+      - name: EMHASS plan active step
+        unique_id: emhass_plan_active_step
+        default_entity_id: sensor.emhass_plan_active_step
+        icon: mdi:timeline-clock
+        state: >
+          {% set rows = state_attr('sensor.p_batt_forecast', 'battery_scheduled_power') or [] %}
+          {% if rows | length == 0 %}
+            No plan data
+          {% else %}
+            {% set r = rows[0] %}
+            {% set p = r.p_batt_forecast | float(0) %}
+            {% set t0 = (r.date | string)[11:16] %}
+            {% set t1 = (rows[1].date | string)[11:16] if rows | length > 1 else "…" %}
+            {% if p < -500 %}
+              {{ t0 }}–{{ t1 }} · charge {{ (-p) | int }} W
+            {% elif p > 500 %}
+              {{ t0 }}–{{ t1 }} · discharge {{ p | int }} W
+            {% else %}
+              {{ t0 }}–{{ t1 }} · idle
+            {% endif %}
+          {% endif %}
+
+      - name: EMHASS plan schedule
+        unique_id: emhass_plan_schedule
+        default_entity_id: sensor.emhass_plan_schedule
+        icon: mdi:table-clock
+        state: >
+          {% set batt = state_attr('sensor.p_batt_forecast', 'battery_scheduled_power') or [] %}
+          {% if batt | length == 0 %}
+            waiting for MPC
+          {% else %}
+            {{ batt | length }} × 30 min (to {{ (batt[-1].date | string)[11:16] }})
+          {% endif %}
+        attributes:
+          markdown: >
+            {% set batt = state_attr('sensor.p_batt_forecast', 'battery_scheduled_power') or [] %}
+            {% set pv_f = state_attr('sensor.p_pv_forecast', 'forecasts') or [] %}
+            {% set grid_f = state_attr('sensor.p_grid_forecast', 'forecasts') or [] %}
+            {% set soc_f = state_attr('sensor.soc_batt_forecast', 'battery_scheduled_soc') or [] %}
+            {% set price_f = state_attr('sensor.unit_load_cost', 'unit_load_cost_forecasts') or [] %}
+            {% if batt | length == 0 %}
+            _No plan rows yet. MPC runs at **:00** and **:30** on the energy host._
+            {% else %}
+            | From | PV W | Battery | Grid | SOC % | Import €/kWh |
+            |:---|---:|:---|:---|---:|---:|
+            {% for row in batt %}
+            {% set ts = row.date %}
+            {% set p = row.p_batt_forecast | float(0) %}
+            {% set ns = namespace(pv='—', gr='—', soc='—', pr='—') %}
+            {% for x in pv_f %}{% if x.date == ts %}{% set ns.pv = x.p_pv_forecast %}{% endif %}{% endfor %}
+            {% for x in grid_f %}{% if x.date == ts %}{% set ns.gr = x.p_grid_forecast %}{% endif %}{% endfor %}
+            {% for x in soc_f %}{% if x.date == ts %}{% set ns.soc = x.soc_batt_forecast %}{% endif %}{% endfor %}
+            {% for x in price_f %}{% if x.date == ts %}{% set ns.pr = x.unit_load_cost %}{% endif %}{% endfor %}
+            {% set t = (ts | string)[11:16] %}
+            {% if p < -500 %}{% set btxt = 'chg ' ~ ((-p) | int) ~ ' W' %}{% elif p > 500 %}{% set btxt = 'dis ' ~ (p | int) ~ ' W' %}{% else %}{% set btxt = 'idle' %}{% endif %}
+            {% set g = ns.gr | float(none) %}
+            {% if g is not none and g > 50 %}{% set gtxt = (g | int) ~ ' W import' %}{% elif g is not none and g < -50 %}{% set gtxt = (g | abs | int) ~ ' W export' %}{% elif g is not none %}{% set gtxt = '≈0' %}{% else %}{% set gtxt = '—' %}{% endif %}
+            | **{{ t }}** | {{ ns.pv }} | {{ btxt }} | {{ gtxt }} | {{ ns.soc }} | {{ ns.pr }} |
+            {% endfor %}
+            _Negative battery = charge · Positive = discharge · Grid import = buy from net._
+            {% endif %}
+          plan_updated_min: >
+            {{ ((now() - states.sensor.p_batt_forecast.last_updated).total_seconds() / 60) | round(0) }}
+
+      - name: EMHASS price rank now
+        unique_id: emhass_price_rank_now
+        default_entity_id: sensor.emhass_price_rank_now
+        icon: mdi:cash-multiple
+        state: >
+          {% set price = states('sensor.unit_load_cost') | float(none) %}
+          {% if price is none %}
+            unknown
+          {% else %}
+            {% set mn = state_attr('sensor.unit_load_cost', 'min') | default(none) %}
+            {% set mx = state_attr('sensor.unit_load_cost', 'max') | default(none) %}
+            {% if mn is none or mx is none or mx == mn %}
+              mid
+            {% elif price <= mn + 0.001 %}
+              low
+            {% elif price >= mx - 0.001 %}
+              high
+            {% else %}
+              mid
+            {% endif %}
+          {% endif %}
+
+  - binary_sensor:
+      - name: EMHASS plan valid
+        unique_id: emhass_plan_valid
+        default_entity_id: binary_sensor.emhass_plan_valid
+        device_class: problem
+        state: "{{ is_state('sensor.optim_status', 'Optimal') }}"
+
+      - name: EMHASS control allowed
+        unique_id: emhass_control_allowed
+        default_entity_id: binary_sensor.emhass_control_allowed
+        device_class: running
+        state: >
+          {% set ns = namespace(ok=true) %}
+          {% if not is_state('input_boolean.emhass_auto_control_master', 'on') %}
+            {% set ns.ok = false %}
+          {% endif %}
+          {% if not is_state('sensor.optim_status', 'Optimal') %}
+            {% set ns.ok = false %}
+          {% endif %}
+          {% set pb = states('sensor.p_batt_forecast') %}
+          {% if pb in ['unknown', 'unavailable', 'none', ''] %}
+            {% set ns.ok = false %}
+          {% elif (pb | float(none)) is none %}
+            {% set ns.ok = false %}
+          {% endif %}
+          {% if ns.ok %}
+            {% set age = (now() - states.sensor.p_batt_forecast.last_updated).total_seconds() %}
+            {% if age > 35 * 60 %}
+              {% set ns.ok = false %}
+            {% endif %}
+          {% endif %}
+          {% set soc = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(none) %}
+          {% set min_soc = states('input_number.emhass_min_soc_reserve') | float(10) %}
+          {% if soc is none or soc < min_soc or soc > 100 %}
+            {% set ns.ok = false %}
+          {% endif %}
+          {% set pf = states('sensor.emhass_prices_fetched_at') %}
+          {% if pf not in ['unknown', 'unavailable', 'none', ''] %}
+            {% set pf_age = (now() - states.sensor.emhass_prices_fetched_at.last_changed).total_seconds() %}
+            {% if pf_age > 26 * 3600 %}
+              {% set ns.ok = false %}
+            {% endif %}
+          {% endif %}
+          {{ ns.ok }}
+        attributes:
+          master_on: "{{ is_state('input_boolean.emhass_auto_control_master', 'on') }}"
+          optim_status: "{{ states('sensor.optim_status') }}"
+          p_batt_forecast: "{{ states('sensor.p_batt_forecast') }}"
+          p_batt_age_min: >
+            {{ ((now() - states.sensor.p_batt_forecast.last_updated).total_seconds() / 60)
+               | round(1) }}
+          battery_soc: "{{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') }}"

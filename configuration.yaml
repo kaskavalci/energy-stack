@@ -1,0 +1,26 @@
+# Example HA configuration fragment (energy-stack repo).
+# Live configuration.yaml on .109 is merged additively by scripts/deploy-home-assistant.sh.
+
+recorder:
+  purge_keep_days: 7
+  exclude:
+    entity_globs:
+      - input_number.emhass_soc_*
+
+homeassistant:
+  packages:
+    reterminal_emhass: !include ha_emhass.yaml
+    reterminal_emhass_sensors: !include ha_emhass_sensors.yaml
+    reterminal_emhass_dashboard: !include ha_emhass_dashboard.yaml
+    reterminal_emhass_monitoring: !include ha_emhass_monitoring.yaml
+    reterminal_emhass_helpers: !include ha_emhass_helpers.yaml
+    reterminal_sigen_ems: !include ha_sigen_ems.yaml
+
+lovelace:
+  dashboards:
+    emhass-trading:
+      mode: yaml
+      title: EMHASS & Sigen
+      icon: mdi:battery-charging-wireless
+      show_in_sidebar: true
+      filename: dashboards/emhass_trading.yaml

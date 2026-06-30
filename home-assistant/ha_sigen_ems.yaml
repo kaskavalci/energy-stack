@@ -1,0 +1,543 @@
+# Sigenergy Remote EMS: manual scripts, kill switch, EMHASS → limit automation.
+# Site entities (rendered from config/site.env): SIGEN_PLANT_SLUG
+# EMS mode strings: input_select.* (synced from select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode)
+
+input_boolean:
+  emhass_auto_control_master:
+    name: EMHASS auto control master
+    icon: mdi:robot-industrial
+
+input_number:
+  emhass_max_charge_cap_w:
+    name: EMHASS max charge cap
+    min: 0
+    max: 15000
+    step: 100
+    unit_of_measurement: W
+    mode: box
+    initial: 9000
+  emhass_max_discharge_cap_w:
+    name: EMHASS max discharge cap
+    min: 0
+    max: 15000
+    step: 100
+    unit_of_measurement: W
+    mode: box
+    initial: 9000
+  emhass_power_threshold_w:
+    name: EMHASS batt power threshold
+    min: 0
+    max: 5000
+    step: 50
+    unit_of_measurement: W
+    mode: box
+    initial: 500
+  emhass_soc_target:
+    name: EMHASS SOC target (fraction)
+    min: 0.1
+    max: 0.9
+    step: 0.05
+    mode: box
+    initial: 0.6
+  emhass_min_soc_reserve:
+    name: EMHASS min SOC reserve
+    min: 5
+    max: 30
+    step: 1
+    unit_of_measurement: "%"
+    mode: box
+    initial: 10
+  emhass_recovery_target_soc:
+    name: EMHASS recovery target SOC
+    min: 10
+    max: 50
+    step: 1
+    unit_of_measurement: "%"
+    mode: box
+    initial: 15
+
+input_select:
+  # Options from select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode (HA REST, 2026-05-23)
+  emhass_ems_mode_charge:
+    name: Sigen EMS mode (charge)
+    options: &sigen_ems_mode_options
+      - "PCS remote control"
+      - "Standby"
+      - "Maximum Self-consumption (Default)"
+      - "Command Charging (Consume power from the grid first)"
+      - "Command Charging (Consume power from the PV first)"
+      - "Command Discharging (Output power from PV first)"
+      - "Command Discharging (Output power from the battery first)"
+    initial: "Command Charging (Consume power from the grid first)"
+  emhass_ems_mode_discharge:
+    name: Sigen EMS mode (discharge)
+    options: *sigen_ems_mode_options
+    initial: "Command Discharging (Output power from the battery first)"
+  emhass_ems_mode_idle:
+    name: Sigen EMS mode (idle)
+    options: *sigen_ems_mode_options
+    initial: "Standby"
+  emhass_ems_mode_native:
+    name: Sigen EMS mode (native fallback)
+    options: *sigen_ems_mode_options
+    initial: "Maximum Self-consumption (Default)"
+
+input_datetime:
+  emhass_last_limit_write:
+    name: EMHASS last Sigen limit write
+    has_date: true
+    has_time: true
+
+script:
+  sigen_set_ems_mode:
+    alias: Sigen set Remote EMS mode
+    mode: single
+    fields:
+      mode:
+        description: charge, discharge, or idle
+        selector:
+          select:
+            options:
+              - charge
+              - discharge
+              - idle
+    sequence:
+      - variables:
+          option: >
+            {% if mode == 'charge' %}
+              {{ states('input_select.emhass_ems_mode_charge') }}
+            {% elif mode == 'discharge' %}
+              {{ states('input_select.emhass_ems_mode_discharge') }}
+            {% else %}
+              {{ states('input_select.emhass_ems_mode_idle') }}
+            {% endif %}
+      - service: select.select_option
+        target:
+          entity_id: select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode
+        data:
+          option: "{{ option }}"
+
+  sigen_apply_charge_limits:
+    alias: Sigen apply charge power limit
+    description: Run script.sigen_set_ems_mode (charge) first; wait until mode updates before this script.
+    mode: queued
+    fields:
+      watts:
+        description: Power cap in watts (converted to kW for Sigen number entities)
+        selector:
+          number:
+            min: 0
+            max: 15000
+            step: 50
+            unit_of_measurement: W
+    sequence:
+      - variables:
+          limit_kw: "{{ (watts | float(0) / 1000) | round(2) }}"
+      - service: number.set_value
+        target:
+          entity_id: number.__SIGEN_PLANT_SLUG___plant_max_charging_limit
+        data:
+          value: "{{ limit_kw }}"
+      - service: number.set_value
+        target:
+          entity_id: number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit
+        data:
+          value: 0
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.emhass_last_limit_write
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+
+  sigen_apply_discharge_limits:
+    alias: Sigen apply discharge power limit
+    mode: queued
+    fields:
+      watts:
+        description: Power cap in watts (converted to kW for Sigen number entities)
+        selector:
+          number:
+            min: 0
+            max: 15000
+            step: 50
+            unit_of_measurement: W
+    sequence:
+      - variables:
+          limit_kw: "{{ (watts | float(0) / 1000) | round(2) }}"
+      - service: number.set_value
+        target:
+          entity_id: number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit
+        data:
+          value: "{{ limit_kw }}"
+      - service: number.set_value
+        target:
+          entity_id: number.__SIGEN_PLANT_SLUG___plant_max_charging_limit
+        data:
+          value: 0
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.emhass_last_limit_write
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+
+  sigen_apply_idle_limits:
+    alias: Sigen idle limits (both zero)
+    mode: queued
+    sequence:
+      - service: number.set_value
+        target:
+          entity_id: number.__SIGEN_PLANT_SLUG___plant_max_charging_limit
+        data:
+          value: 0
+      - service: number.set_value
+        target:
+          entity_id: number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit
+        data:
+          value: 0
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.emhass_last_limit_write
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+
+  sigen_restore_native_control:
+    alias: Sigen restore native control
+    description: Restore native Maximum Self-consumption mode and restore max power limits so the BMS can operate freely.
+    mode: single
+    sequence:
+      - service: select.select_option
+        continue_on_error: true
+        target:
+          entity_id: select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode
+        data:
+          option: "{{ states('input_select.emhass_ems_mode_native') }}"
+      - service: number.set_value
+        continue_on_error: true
+        target:
+          entity_id: number.__SIGEN_PLANT_SLUG___plant_max_charging_limit
+        data:
+          value: "{{ (states('input_number.emhass_max_charge_cap_w') | float(9000) / 1000) | round(2) }}"
+      - service: number.set_value
+        continue_on_error: true
+        target:
+          entity_id: number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit
+        data:
+          value: "{{ (states('input_number.emhass_max_discharge_cap_w') | float(9000) / 1000) | round(2) }}"
+      - service: input_datetime.set_datetime
+        target:
+          entity_id: input_datetime.emhass_last_limit_write
+        data:
+          datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+
+  sigen_disable_remote_ems:
+    alias: Sigen disable Remote EMS control
+    description: Restore limits and set self-consumption mode when master is turned off.
+    mode: single
+    sequence:
+      - service: script.sigen_restore_native_control
+
+  sigen_apply_emhass_plan:
+    alias: Sigen apply EMHASS p_batt_forecast to limits
+    description: >-
+      Negative p_batt_forecast = charge; positive = discharge (EMHASS sign).
+      Discharge branch includes SOC headroom clamp to prevent overshoot below floor.
+      Requires binary_sensor.emhass_control_allowed.
+    mode: single
+    sequence:
+      - variables:
+          threshold: "{{ states('input_number.emhass_power_threshold_w') | float(500) }}"
+          p: "{{ states('sensor.p_batt_forecast') | float(0) }}"
+          charge_w: "{{ states('sensor.emhass_batt_charge_power_w') | float(0) }}"
+          discharge_w: "{{ states('sensor.emhass_batt_discharge_power_w') | float(0) }}"
+          max_chg: "{{ states('input_number.emhass_max_charge_cap_w') | float(9000) }}"
+          max_dis: "{{ states('input_number.emhass_max_discharge_cap_w') | float(9000) }}"
+          soc: "{{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(50) }}"
+          # SOC headroom clamp: max discharge watts that keep SOC above floor
+          min_soc_frac: "{{ states('input_number.emhass_min_soc_reserve') | float(10) / 100 }}"
+          capacity_wh: 19000
+          eta_dis: 0.95
+          step_h: 0.5
+          headroom_wh: "{{ [0, (soc / 100 - min_soc_frac) * capacity_wh * eta_dis] | max }}"
+          max_by_soc_w: "{{ (headroom_wh / step_h) | round(0) }}"
+          charge_limit: "{{ [charge_w, max_chg] | min | round(0) }}"
+          # Discharge capped by plan, user cap, AND SOC headroom
+          discharge_limit: "{{ [discharge_w, max_dis, max_by_soc_w] | min | round(0) }}"
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ p < (0 - threshold) and soc < 100 }}"
+            sequence:
+              - service: script.sigen_set_ems_mode
+                data:
+                  mode: charge
+              - service: script.sigen_apply_charge_limits
+                data:
+                  watts: "{{ charge_limit }}"
+          - conditions:
+              - condition: template
+                # Headroom clamp may reduce discharge_limit below threshold → idle
+                value_template: "{{ p > threshold and discharge_limit >= threshold and soc > min_soc_frac * 100 }}"
+            sequence:
+              - service: script.sigen_set_ems_mode
+                data:
+                  mode: discharge
+              - service: script.sigen_apply_discharge_limits
+                data:
+                  watts: "{{ discharge_limit }}"
+        default:
+          - service: script.sigen_set_ems_mode
+            data:
+              mode: idle
+          - service: script.sigen_apply_idle_limits
+
+automation:
+  - id: emhass_sigen_kill_switch_off
+    alias: EMHASS Sigen — kill switch disables Remote EMS
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: input_boolean.emhass_auto_control_master
+        from: "on"
+        to: "off"
+    action:
+      - service: script.sigen_disable_remote_ems
+
+  - id: emhass_sigen_enforce_master_off
+    alias: EMHASS Sigen — enforce master off when reconnecting
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode
+        to:
+          - "Command Discharging (Output power from PV first)"
+          - "Command Discharging (Output power from the battery first)"
+          - "Command Charging (Consume power from the grid first)"
+      - platform: state
+        entity_id: select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode
+        from:
+          - "unknown"
+          - "unavailable"
+    condition:
+      - condition: state
+        entity_id: input_boolean.emhass_auto_control_master
+        state: "off"
+      - condition: template
+        value_template: >-
+          {{ states('select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode') in [
+               'Command Discharging (Output power from PV first)',
+               'Command Discharging (Output power from the battery first)',
+               'Command Charging (Consume power from the grid first)'
+             ] }}
+    action:
+      - service: script.sigen_disable_remote_ems
+
+  - id: emhass_sigen_apply_plan_scheduled
+    alias: EMHASS Sigen — apply plan on MPC schedule
+    description: Runs at :00 and :30 when control gates pass; min 5 min between writes
+    mode: single
+    trigger:
+      - platform: time_pattern
+        minutes: "/30"
+    condition:
+      - condition: state
+        entity_id: binary_sensor.emhass_control_allowed
+        state: "on"
+      - condition: template
+        value_template: >
+          {% set last = states('input_datetime.emhass_last_limit_write') %}
+          {% if last in ['unknown', 'unavailable', ''] %}
+            true
+          {% else %}
+            {{ (as_timestamp(now()) - as_timestamp(last)) > 300 }}
+          {% endif %}
+    action:
+      - service: script.sigen_apply_emhass_plan
+
+  - id: emhass_sigen_disable_on_stale_plan
+    alias: EMHASS Sigen — disable when plan stale with master on
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.emhass_control_allowed
+        from: "on"
+        to: "off"
+        for:
+          minutes: 1
+    condition:
+      - condition: state
+        entity_id: input_boolean.emhass_auto_control_master
+        state: "on"
+    action:
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {% set soc = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(none) %}
+                  {% set min_soc = states('input_number.emhass_min_soc_reserve') | float(10) %}
+                  {{ soc is not none and soc < min_soc }}
+            sequence:
+              - service: script.sigen_set_ems_mode
+                data:
+                  mode: idle
+              - service: script.sigen_apply_idle_limits
+        default:
+          - service: script.sigen_restore_native_control
+      - service: script.emhass_push_alert
+        data:
+          title: "EMHASS D2: Remote EMS off"
+          message: >-
+            Control gates failed — Remote EMS disabled (master still on; turn off master to acknowledge).
+
+  - id: emhass_sigen_disable_on_bad_optim
+    alias: EMHASS Sigen — disable when optim not Optimal
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: sensor.optim_status
+        not_to:
+          - "unknown"
+          - "unavailable"
+    condition:
+      - condition: state
+        entity_id: input_boolean.emhass_auto_control_master
+        state: "on"
+      - condition: template
+        value_template: "{{ not is_state('sensor.optim_status', 'Optimal') }}"
+    action:
+      - service: script.sigen_restore_native_control
+      - service: script.emhass_push_alert
+        data:
+          title: "EMHASS D2: bad optim"
+          message: >-
+            optim_status={{ states('sensor.optim_status') }} — Remote EMS disabled.
+
+  # --- SOC floor enforcement (Layer 2) ---
+
+  - id: emhass_soc_floor_cutout
+    alias: "EMHASS SOC floor cutout — stop discharge at min SOC"
+    description: >-
+      Real-time safety net: immediately stops discharge when SOC crosses the floor,
+      without waiting for the next :00/:30 apply cycle.
+    mode: single
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
+        below: input_number.emhass_min_soc_reserve
+      - platform: state
+        entity_id: select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode
+        to:
+          - "Command Discharging (Output power from PV first)"
+          - "Command Discharging (Output power from the battery first)"
+    condition:
+      # We must be below the reserve floor
+      - condition: numeric_state
+        entity_id: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
+        below: input_number.emhass_min_soc_reserve
+      # Only intervene if we are actively discharging
+      - condition: template
+        value_template: >-
+          {{ states('select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode')
+             in ['Command Discharging (Output power from PV first)',
+                 'Command Discharging (Output power from the battery first)'] }}
+    action:
+      - service: script.sigen_set_ems_mode
+        data:
+          mode: idle
+      - service: script.sigen_apply_idle_limits
+      - service: script.emhass_push_alert
+        data:
+          title: "EMHASS D4: SOC floor cutout"
+          message: >-
+            SOC {{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') }}% hit floor
+            ({{ states('input_number.emhass_min_soc_reserve') }}%).
+            Discharge stopped. Recovery charging will engage when EMHASS plans charge.
+
+  # --- Recovery charging (Layer 3) ---
+  # Pass through EMHASS charge plans even when emhass_control_allowed is off due to
+  # SOC being below the floor. Uses EMHASS plan value for charge power.
+
+  - id: emhass_recovery_charge
+    alias: "EMHASS recovery — pass through charge plan when below SOC floor"
+    description: >-
+      When SOC is below the recovery target and EMHASS plans charging,
+      apply the charge even though emhass_control_allowed may be off.
+      This is the path out of the stuck state after a floor breach.
+    mode: single
+    trigger:
+      - platform: time_pattern
+        minutes: "/30"
+      # Also trigger immediately when floor cutout fires
+      - platform: state
+        entity_id: binary_sensor.emhass_fail_soc_extreme
+        to: "on"
+    condition:
+      - condition: state
+        entity_id: input_boolean.emhass_auto_control_master
+        state: "on"
+      # SOC is below recovery target (15% default, includes hysteresis above 10% floor)
+      - condition: template
+        value_template: >-
+          {% set soc = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(50) %}
+          {% set target = states('input_number.emhass_recovery_target_soc') | float(15) %}
+          {{ soc < target }}
+      # EMHASS must be planning a charge (p_batt negative) — this is the (d) choice
+      - condition: template
+        value_template: >-
+          {% set p = states('sensor.p_batt_forecast') | float(0) %}
+          {% set threshold = states('input_number.emhass_power_threshold_w') | float(500) %}
+          {{ p < (0 - threshold) }}
+      # Require a valid, fresh plan (same gates as control_allowed minus the SOC check)
+      - condition: state
+        entity_id: sensor.optim_status
+        state: "Optimal"
+      - condition: template
+        value_template: >-
+          {% set pb = states('sensor.p_batt_forecast') %}
+          {% if pb in ['unknown', 'unavailable', 'none', ''] %}false
+          {% else %}{{ (now() - states.sensor.p_batt_forecast.last_updated).total_seconds() < 35 * 60 }}
+          {% endif %}
+      # Rate limit: no writes within 5 min
+      - condition: template
+        value_template: >-
+          {% set last = states('input_datetime.emhass_last_limit_write') %}
+          {% if last in ['unknown', 'unavailable', ''] %}true
+          {% else %}{{ (as_timestamp(now()) - as_timestamp(last)) > 300 }}
+          {% endif %}
+    action:
+      - variables:
+          charge_w: "{{ states('sensor.emhass_batt_charge_power_w') | float(0) }}"
+          max_chg: "{{ states('input_number.emhass_max_charge_cap_w') | float(9000) }}"
+          charge_limit: "{{ [charge_w, max_chg] | min | round(0) }}"
+      - service: script.sigen_set_ems_mode
+        data:
+          mode: charge
+      - service: script.sigen_apply_charge_limits
+        data:
+          watts: "{{ charge_limit }}"
+      - service: script.emhass_push_alert
+        data:
+          title: "EMHASS D5: recovery charge"
+          message: >-
+            SOC {{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') }}% below
+            target {{ states('input_number.emhass_recovery_target_soc') }}%.
+            Recovery charging at {{ charge_limit }} W (from EMHASS plan).
+
+  - id: emhass_recovery_complete
+    alias: "EMHASS recovery complete — notify and resume normal control"
+    mode: single
+    trigger:
+      - platform: numeric_state
+        entity_id: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
+        above: input_number.emhass_recovery_target_soc
+    condition:
+      - condition: state
+        entity_id: input_boolean.emhass_auto_control_master
+        state: "on"
+    action:
+      - service: script.emhass_push_alert
+        data:
+          title: "EMHASS D5: recovery complete"
+          message: >-
+            SOC {{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') }}% reached
+            recovery target {{ states('input_number.emhass_recovery_target_soc') }}%.
+            Normal MPC control resumed.

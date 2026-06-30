@@ -1,0 +1,7 @@
+# Copy to mosquitto/config/mosquitto.conf (gitignored) for local broker.
+# LAN-only — do not expose port 1883 to the internet without authentication.
+
+listener 1883
+allow_anonymous true
+persistence true
+persistence_location /mosquitto/data/

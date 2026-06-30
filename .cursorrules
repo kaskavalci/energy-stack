@@ -1,0 +1,9 @@
+# Cursor rules
+
+Shared agent instructions live in **AGENTS.md** at the repo root.
+
+Before any task: read `memory-bank/activeContext.md` and `memory-bank/techContext.md` per AGENTS.md.
+
+For EMHASS / energy-stack work: follow `.agents/skills/emhass-energy-stack/SKILL.md`.
+
+Update `memory-bank/` after significant changes without waiting to be asked.

@@ -1,0 +1,20 @@
+input_number:
+  emhass_soc_min:
+    name: EMHASS Min SOC
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:battery-10
+    mode: slider
+    initial: 5
+
+  emhass_soc_max:
+    name: EMHASS Max SOC
+    min: 0
+    max: 100
+    step: 1
+    unit_of_measurement: "%"
+    icon: mdi:battery-90
+    mode: slider
+    initial: 95

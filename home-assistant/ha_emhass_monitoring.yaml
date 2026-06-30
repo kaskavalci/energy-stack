@@ -1,0 +1,306 @@
+# Site entities (rendered from config/site.env): ENVOY_PV_ENTITY, SIGEN_PLANT_SLUG, P1_* 
+# HA-side failure alerts → notify.notify (Companion app). Host checks run on energy host (energy-monitor).
+# Requires: Settings → Companion app → Notifications enabled; notify.notify targets your devices.
+
+script:
+  emhass_push_alert:
+    alias: EMHASS push alert
+    mode: queued
+    fields:
+      title:
+        selector:
+          text:
+      message:
+        selector:
+          text:
+    sequence:
+      - service: notify.notify
+        data:
+          title: "{{ title }}"
+          message: "{{ message }}"
+
+template:
+  - binary_sensor:
+      - name: EMHASS fail optim
+        unique_id: emhass_fail_optim
+        default_entity_id: binary_sensor.emhass_fail_optim
+        device_class: problem
+        state: >
+          {{ not is_state('sensor.optim_status', 'Optimal') }}
+
+      - name: EMHASS fail flat prices
+        unique_id: emhass_fail_flat_prices
+        default_entity_id: binary_sensor.emhass_fail_flat_prices
+        device_class: problem
+        state: >
+          {% set mn = state_attr('sensor.unit_load_cost', 'min') | float(none) %}
+          {% set mx = state_attr('sensor.unit_load_cost', 'max') | float(none) %}
+          {{ mn is not none and mx is not none and (mx - mn) < 0.0005 }}
+
+      - name: EMHASS fail plan stale
+        unique_id: emhass_fail_plan_stale
+        default_entity_id: binary_sensor.emhass_fail_plan_stale
+        device_class: problem
+        state: >
+          {% set pb = states('sensor.p_batt_forecast') %}
+          {% if pb in ['unknown', 'unavailable', 'none', ''] %}
+            true
+          {% else %}
+            {{ (now() - states.sensor.p_batt_forecast.last_updated).total_seconds() > 35 * 60 }}
+          {% endif %}
+
+      - name: EMHASS fail PV sensor
+        unique_id: emhass_fail_pv_sensor
+        default_entity_id: binary_sensor.emhass_fail_pv_sensor
+        device_class: problem
+        state: >
+          {% if not is_state('sun.sun', 'above_horizon') %}
+            false
+          {% else %}
+            {% set raw_envoy = '__ENVOY_PV_ENTITY__' %}
+            {% set raw = states[raw_envoy] %}
+            {% set bad = ['unknown', 'unavailable', 'none', ''] %}
+            {{ raw is none
+               or states(raw_envoy) in bad
+               or (now() - raw.last_updated).total_seconds() > 20 * 60 }}
+          {% endif %}
+
+      - name: EMHASS fail house load inputs
+        unique_id: emhass_fail_house_load
+        default_entity_id: binary_sensor.emhass_fail_house_load
+        device_class: problem
+        state: >
+          {% set stale_after_s = 20 * 60 %}
+          {% set bad = ['unknown', 'unavailable', 'none', ''] %}
+          {% set ns = namespace(fail=false) %}
+          {% for entity_id in [
+            '__P1_POWER_NET_ENTITY__',
+            'sensor.__SIGEN_PLANT_SLUG___plant_battery_power',
+          ] %}
+            {% set entity = states[entity_id] %}
+            {% if entity is none
+                  or entity.state in bad
+                  or (now() - entity.last_updated).total_seconds() > stale_after_s %}
+              {% set ns.fail = true %}
+            {% endif %}
+          {% endfor %}
+          {{ ns.fail }}
+
+      - name: EMHASS fail battery SOC
+        unique_id: emhass_fail_battery_soc
+        default_entity_id: binary_sensor.emhass_fail_battery_soc
+        device_class: problem
+        state: >
+          {{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') in ['unknown', 'unavailable', 'none', ''] }}
+
+      - name: EMHASS fail load/Sigen sensors
+        unique_id: emhass_fail_sigen_sensors
+        default_entity_id: binary_sensor.emhass_fail_sigen_sensors
+        device_class: problem
+        state: >
+          {{ is_state('binary_sensor.emhass_fail_house_load', 'on')
+             or is_state('binary_sensor.emhass_fail_battery_soc', 'on') }}
+
+      - name: EMHASS fail P1 sensors
+        unique_id: emhass_fail_p1_sensors
+        default_entity_id: binary_sensor.emhass_fail_p1_sensors
+        device_class: problem
+        state: >
+          {{ states('__P1_POWER_CONSUMPTION_ENTITY__') in ['unknown', 'unavailable', 'none', '']
+             or states('__P1_POWER_NET_ENTITY__') in ['unknown', 'unavailable', 'none', ''] }}
+
+      - name: EMHASS fail Sigen MQTT
+        unique_id: emhass_fail_sigen_mqtt
+        default_entity_id: binary_sensor.emhass_fail_sigen_mqtt
+        device_class: problem
+        state: >
+          {{ states('select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode')
+             in ['unknown', 'unavailable', 'none', ''] }}
+
+      - name: EMHASS fail control blocked
+        unique_id: emhass_fail_control_blocked
+        default_entity_id: binary_sensor.emhass_fail_control_blocked
+        device_class: problem
+        state: >
+          {{ is_state('input_boolean.emhass_auto_control_master', 'on')
+             and not is_state('binary_sensor.emhass_control_allowed', 'on') }}
+
+      - name: EMHASS fail SOC extreme
+        unique_id: emhass_fail_soc_extreme
+        default_entity_id: binary_sensor.emhass_fail_soc_extreme
+        device_class: problem
+        state: >
+          {% if not is_state('input_boolean.emhass_auto_control_master', 'on') %}
+            false
+          {% else %}
+            {% set soc = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(none) %}
+            {% set floor = states('input_number.emhass_min_soc_reserve') | float(10) %}
+            {{ soc is not none and (soc <= floor or soc > 100) }}
+          {% endif %}
+
+automation:
+  # A1 (16:30 day-ahead) retired: prices refresh on each MPC via emhass-cron, no 15:35 cron.
+
+  - id: emhass_notify_A2_optim_mpc
+    alias: "EMHASS notify A2: optim not Optimal"
+    mode: single
+    trigger:
+      - platform: time_pattern
+        minutes: "/30"
+      - platform: state
+        entity_id: binary_sensor.emhass_fail_optim
+        to: "on"
+    condition:
+      - condition: state
+        entity_id: binary_sensor.emhass_fail_optim
+        state: "on"
+    action:
+      - service: script.emhass_push_alert
+        data:
+          title: "EMHASS A2: optim"
+          message: >-
+            optim_status={{ states('sensor.optim_status') }} (expected Optimal).
+
+  - id: emhass_notify_A3_flat_prices
+    alias: "EMHASS notify A3: flat prices"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.emhass_fail_flat_prices
+        to: "on"
+        for:
+          minutes: 30
+    action:
+      - service: script.emhass_push_alert
+        data:
+          title: "EMHASS A3: prices"
+          message: >-
+            unit_load_cost min/max equal ({{ states('sensor.unit_load_cost') }}).
+            Enever CSV may not be loaded.
+
+  - id: emhass_notify_A5_plan_stale
+    alias: "EMHASS notify A5: stale plan"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.emhass_fail_plan_stale
+        to: "on"
+        for:
+          minutes: 10
+    action:
+      - service: script.emhass_push_alert
+        data:
+          title: "EMHASS A5: stale plan"
+          message: >-
+            p_batt_forecast not updated >35 min. MPC/publish may have failed.
+
+  - id: emhass_notify_C1_pv
+    alias: "EMHASS notify C1: PV sensor"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.emhass_fail_pv_sensor
+        to: "on"
+        for:
+          minutes: 15
+    action:
+      - service: script.emhass_push_alert
+        data:
+          title: "EMHASS C1: Enphase PV"
+          message: >-
+            Envoy PV unavailable or stale (>20 min). Check Enphase integration.
+
+  - id: emhass_notify_C2a_house_load
+    alias: "EMHASS notify C2a: house load inputs"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.emhass_fail_house_load
+        to: "on"
+        for:
+          minutes: 10
+    action:
+      - service: script.emhass_push_alert
+        data:
+          title: "EMHASS C2a: house load"
+          message: >-
+            P1 net power or Sigen battery power unavailable/stale (>20 min).
+            Check mqtt4dsmr or sigenergy2mqtt on .135.
+
+  - id: emhass_notify_C2b_soc
+    alias: "EMHASS notify C2b: battery SOC"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.emhass_fail_battery_soc
+        to: "on"
+        for:
+          minutes: 10
+    action:
+      - service: script.emhass_push_alert
+        data:
+          title: "EMHASS C2b: battery SOC"
+          message: >-
+            sensor.__SIGEN_PLANT_SLUG___plant_battery_soc unavailable.
+            Check sigenergy2mqtt on .135.
+
+  - id: emhass_notify_E1_p1
+    alias: "EMHASS notify E1: P1"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.emhass_fail_p1_sensors
+        to: "on"
+        for:
+          minutes: 15
+    action:
+      - service: script.emhass_push_alert
+        data:
+          title: "EMHASS E1: P1 meter"
+          message: P1 power consumption or net power unavailable.
+
+  - id: emhass_notify_E2_sigen_mqtt
+    alias: "EMHASS notify E2: sigenergy2mqtt"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.emhass_fail_sigen_mqtt
+        to: "on"
+        for:
+          minutes: 15
+    action:
+      - service: script.emhass_push_alert
+        data:
+          title: "EMHASS E2: Sigen MQTT"
+          message: Remote EMS select unavailable. Check sigenergy2mqtt on .135.
+
+  - id: emhass_notify_D1_control_blocked
+    alias: "EMHASS notify D1: control blocked"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.emhass_fail_control_blocked
+        to: "on"
+        for:
+          minutes: 5
+    action:
+      - service: script.emhass_push_alert
+        data:
+          title: "EMHASS D1: gates"
+          message: >-
+            Master ON but control not allowed. optim={{ states('sensor.optim_status') }},
+            p_batt age={{ state_attr('binary_sensor.emhass_control_allowed', 'p_batt_age_min') }} min.
+
+  - id: emhass_notify_D3_soc
+    alias: "EMHASS notify D3: SOC extreme"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.emhass_fail_soc_extreme
+        to: "on"
+    action:
+      - service: script.emhass_push_alert
+        data:
+          title: "EMHASS D3: SOC"
+          message: >-
+            Battery SOC {{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') }}% with auto control on.

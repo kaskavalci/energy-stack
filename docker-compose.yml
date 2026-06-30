@@ -1,0 +1,98 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto:latest
+    container_name: mosquitto
+    restart: unless-stopped
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/config:/mosquitto/config:ro
+
+  mqtt4dsmr:
+    image: ghcr.io/antonijn/mqtt4dsmr:latest
+    container_name: mqtt4dsmr
+    restart: unless-stopped
+    devices:
+      - /dev/ttyUSB0:/dev/ttyDSMR
+    environment:
+      - MQTT_HOST=mosquitto
+      - MQTT_PORT=1883
+    depends_on:
+      - mosquitto
+
+  sigenergy2mqtt:
+    image: ghcr.io/seud0nym/sigenergy2mqtt:latest
+    container_name: sigenergy2mqtt
+    restart: unless-stopped
+    volumes:
+      - ./sigenergy/sigenergy2mqtt.yaml:/data/sigenergy2mqtt.yaml
+    depends_on:
+      - mosquitto
+
+  emhass:
+    image: ghcr.io/davidusb-geek/emhass:latest
+    container_name: emhass
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./emhass/share:/share/
+      - ./emhass/share/data_load_cost_forecast.csv:/data/data_load_cost_forecast.csv
+      - ./emhass/share/data_prod_price_forecast.csv:/data/data_prod_price_forecast.csv
+      - ./emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml:ro
+    environment:
+      - LOCAL_COSTFUN=profit
+      - TZ=Europe/Amsterdam
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/', timeout=5)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+
+  emhass-cron:
+    build:
+      context: .
+      dockerfile: emhass-cron/Dockerfile
+    container_name: emhass-cron
+    restart: unless-stopped
+    env_file:
+      - config/site.env
+    volumes:
+      - ./emhass/secrets_emhass.yaml:/secrets/secrets_emhass.yaml:ro
+      - ./emhass/share:/share
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - EMAHASS_URL=http://emhass:5000/action/dayahead-optim
+      - EMAHASS_SECRETS=/secrets/secrets_emhass.yaml
+      - EMAHASS_SHARE=/share
+      - EMHASS_CONTAINER=emhass
+      - TZ=Europe/Amsterdam
+    depends_on:
+      emhass:
+        condition: service_healthy
+
+  energy-monitor:
+    build:
+      context: .
+      dockerfile: monitor/Dockerfile
+    container_name: energy-monitor
+    restart: unless-stopped
+    env_file:
+      - config/site.env
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./emhass/share:/share
+      - ./emhass/secrets_emhass.yaml:/secrets/secrets_emhass.yaml:ro
+    environment:
+      - EMAHASS_BASE_URL=http://emhass:5000
+      - EMAHASS_SECRETS=/secrets/secrets_emhass.yaml
+      - EMAHASS_SHARE=/share
+      - EMHASS_CONTAINER=emhass
+      - HA_NOTIFY_SERVICE=notify.notify
+      - ALERT_COOLDOWN_SEC=7200
+      - ALERT_FAILURE_THRESHOLD=2
+      - TZ=Europe/Amsterdam
+    depends_on:
+      emhass:
+        condition: service_healthy

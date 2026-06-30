@@ -1,0 +1,38 @@
+# EMHASS standalone on energy host — publish-data to HA via rest_command.
+# EMHASS reads HA via secrets_emhass.yaml (long-lived token on energy Pi).
+# URL: set emhass_publish_url in HA secrets.yaml (see docs/ha-secrets.example.yaml).
+
+rest_command:
+  emhass_publish_data:
+    url: !secret emhass_publish_url
+    method: POST
+    headers:
+      content-type: application/json
+    payload: "{}"
+
+script:
+  emhass_publish_now:
+    alias: EMHASS publish plan to HA
+    mode: single
+    sequence:
+      - service: rest_command.emhass_publish_data
+
+  emhass_publish_manual:
+    alias: EMHASS publish plan (manual)
+    description: >-
+      Publish-only. Prices + MPC run on energy host (emhass-cron).
+      Does not call dayahead-optim; uses last plan from .135 CSV/MPC runs.
+    mode: single
+    sequence:
+      - service: rest_command.emhass_publish_data
+
+automation:
+  - id: emhass_publish_every_5min
+    alias: EMHASS publish optimization to HA
+    description: Push latest EMHASS plan sensors (after emhass-cron MPC on energy host)
+    mode: single
+    trigger:
+      - platform: time_pattern
+        minutes: "/5"
+    action:
+      - service: rest_command.emhass_publish_data

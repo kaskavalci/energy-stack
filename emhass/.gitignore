@@ -1,0 +1,8 @@
+# Pulled from energy host — do not commit secrets or live runtime data
+secrets_emhass.yaml
+share/config.json
+share/config.json.bak*
+share/data_*_forecast.csv
+share/prices_fetched_at.txt
+share/monitor_alert_state.json
+share/last_enever_run.json
