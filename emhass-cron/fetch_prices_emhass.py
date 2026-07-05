@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import math
 import os
 import sys
 import time
@@ -73,8 +74,6 @@ DEFAULT_EXPORT_PRICE_HAIRCUT = _env_float("EXPORT_PRICE_HAIRCUT_EUR_PER_KWH", 0.
 DEFAULT_PREDICTION_HORIZON = 32
 LOAD_FORECAST_CONSTANT_W = 300.0
 LOAD_FORECAST_MODE = "constant_300w"
-LOAD_FORECAST_MIX_ALPHA = 1.0
-LOAD_FORECAST_MIX_BETA = 0.0
 MIN_PRICE_SLOTS = 12  # 6 h @ 30 min — below this, abort MPC
 # Keep in sync with check_weather_failure_in_last_mpc in health_notify.py (B4)
 WEATHER_FAILURE_KEYWORDS = (
@@ -424,6 +423,21 @@ def fetch_soc_limit(
     return None
 
 
+def fetch_current_load(
+    secrets_path: Path,
+    sensor: str,
+    timeout: float = 15,
+) -> float:
+    try:
+        state = fetch_ha_state(secrets_path, sensor, timeout=timeout)
+        load_w = float(state.get("state", "nan"))
+        if not math.isnan(load_w):
+            return round(load_w, 2)
+    except (HTTPError, URLError, ValueError, TypeError, RuntimeError) as exc:
+        logging.warning("Could not read current load from HA (%s): %s", sensor, exc)
+    return LOAD_FORECAST_CONSTANT_W
+
+
 def call_emhass_action(
     base_url: str,
     action: str,
@@ -527,6 +541,23 @@ def read_soc_final_from_config(share_dir: Path) -> float | None:
     return None
 
 
+def resolve_soc_final(
+    *,
+    omit: bool,
+    cli_override: float | None,
+    soc_min: float | None,
+    share_dir: Path,
+) -> float | None:
+    """MPC horizon endpoint: UI min (soc_min) unless CLI override; config fallback."""
+    if omit:
+        return None
+    if cli_override is not None:
+        return round(float(cli_override), 4)
+    if soc_min is not None:
+        return soc_min
+    return read_soc_final_from_config(share_dir)
+
+
 def _read_config_json(share_dir: Path) -> dict[str, Any]:
     config_path = share_dir / "config.json"
     if not config_path.is_file():
@@ -574,15 +605,18 @@ def resolve_prediction_horizon(share_dir: Path, available_slots: int) -> int:
     return effective
 
 
-def build_load_power_forecast(prediction_horizon: int) -> list[float]:
+def build_load_power_forecast(prediction_horizon: int, first_slot_load: float) -> list[float]:
     if type(prediction_horizon) is not int or prediction_horizon <= 0:
         raise ValueError("prediction_horizon must be a positive integer")
-    return [LOAD_FORECAST_CONSTANT_W] * prediction_horizon
+    forecast = [LOAD_FORECAST_CONSTANT_W] * prediction_horizon
+    forecast[0] = first_slot_load
+    return forecast
 
 
 def build_naive_mpc_payload(
     *,
     prediction_horizon: int,
+    first_slot_load: float,
     soc_init: float | None,
     soc_final: float | None,
     soc_min: float | None = None,
@@ -591,9 +625,7 @@ def build_naive_mpc_payload(
     payload: dict[str, Any] = {
         "weather_forecast_cache_only": True,
         "prediction_horizon": prediction_horizon,
-        "load_power_forecast": build_load_power_forecast(prediction_horizon),
-        "alpha": LOAD_FORECAST_MIX_ALPHA,
-        "beta": LOAD_FORECAST_MIX_BETA,
+        "load_power_forecast": build_load_power_forecast(prediction_horizon, first_slot_load),
     }
     if soc_init is not None:
         payload["soc_init"] = soc_init
@@ -645,6 +677,7 @@ def ensure_weather_forecast_cache(
 def run_mpc_chain(
     base_url: str,
     *,
+    first_slot_load: float,
     soc_init: float | None,
     soc_final: float | None,
     soc_min: float | None = None,
@@ -666,6 +699,7 @@ def run_mpc_chain(
 
     mpc_payload = build_naive_mpc_payload(
         prediction_horizon=prediction_horizon,
+        first_slot_load=first_slot_load,
         soc_init=soc_init,
         soc_final=soc_final,
         soc_min=soc_min,
@@ -742,6 +776,11 @@ def main() -> int:
         "--soc-max-sensor",
         default=DEFAULT_SOC_MAX_SENSOR,
         help="HA sensor for maximum battery SOC (percent, 0-100)",
+    )
+    parser.add_argument(
+        "--load-sensor",
+        default=os.environ.get("EMHASS_LOAD_SENSOR", "sensor.electricity_meter_power_consumption"),
+        help="HA house load sensor (Watts)",
     )
     parser.add_argument(
         "--no-soc",
@@ -898,12 +937,14 @@ def main() -> int:
         soc_init = None if args.no_soc else fetch_soc_init(args.secrets, args.soc_sensor)
         soc_min = fetch_soc_limit(args.secrets, args.soc_min_sensor)
         soc_max = fetch_soc_limit(args.secrets, args.soc_max_sensor)
-        soc_final = None
-        if not args.omit_soc_final:
-            if args.soc_final is not None:
-                soc_final = round(float(args.soc_final), 4)
-            else:
-                soc_final = read_soc_final_from_config(args.share_dir)
+        soc_final = resolve_soc_final(
+            omit=args.omit_soc_final,
+            cli_override=args.soc_final,
+            soc_min=soc_min,
+            share_dir=args.share_dir,
+        )
+        first_slot_load = fetch_current_load(args.secrets, args.load_sensor)
+
         try:
             price_summary = price_fetch_summary(
                 args.secrets,
@@ -932,6 +973,7 @@ def main() -> int:
                         "soc_min": soc_min,
                         "soc_max": soc_max,
                         "prediction_horizon": prediction_horizon,
+                        "first_slot_load": first_slot_load,
                         "load_forecast_mode": LOAD_FORECAST_MODE,
                         "load_forecast_constant_w": LOAD_FORECAST_CONSTANT_W,
                         "weather_cache_stale": stale,
@@ -967,6 +1009,7 @@ def main() -> int:
         try:
             run_mpc_chain(
                 args.emhass_base,
+                first_slot_load=first_slot_load,
                 soc_init=soc_init,
                 soc_final=soc_final,
                 soc_min=soc_min,
