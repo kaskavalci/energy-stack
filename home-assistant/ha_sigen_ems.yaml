@@ -39,22 +39,6 @@ input_number:
     step: 0.05
     mode: box
     initial: 0.6
-  emhass_min_soc_reserve:
-    name: EMHASS min SOC reserve
-    min: 5
-    max: 30
-    step: 1
-    unit_of_measurement: "%"
-    mode: box
-    initial: 10
-  emhass_recovery_target_soc:
-    name: EMHASS recovery target SOC
-    min: 10
-    max: 50
-    step: 1
-    unit_of_measurement: "%"
-    mode: box
-    initial: 15
 
 input_select:
   # Options from select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode (HA REST, 2026-05-23)
@@ -253,7 +237,7 @@ script:
           max_dis: "{{ states('input_number.emhass_max_discharge_cap_w') | float(9000) }}"
           soc: "{{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(50) }}"
           # SOC headroom clamp: max discharge watts that keep SOC above floor
-          min_soc_frac: "{{ states('input_number.emhass_min_soc_reserve') | float(10) / 100 }}"
+          min_soc_frac: "{{ states('input_number.emhass_soc_min') | float(5) / 100 }}"
           capacity_wh: 19000
           eta_dis: 0.95
           step_h: 0.5
@@ -367,13 +351,15 @@ automation:
       - condition: state
         entity_id: input_boolean.emhass_auto_control_master
         state: "on"
+      - condition: template
+        value_template: "{{ state_attr('binary_sensor.emhass_control_allowed', 'block_reason') != 'soc_below_floor' }}"
     action:
       - choose:
           - conditions:
               - condition: template
                 value_template: >-
                   {% set soc = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(none) %}
-                  {% set min_soc = states('input_number.emhass_min_soc_reserve') | float(10) %}
+                  {% set min_soc = states('input_number.emhass_soc_min') | float(5) %}
                   {{ soc is not none and soc < min_soc }}
             sequence:
               - service: script.sigen_set_ems_mode
@@ -386,7 +372,7 @@ automation:
         data:
           title: "EMHASS D2: Remote EMS off"
           message: >-
-            Control gates failed — Remote EMS disabled (master still on; turn off master to acknowledge).
+            Action: Turn off master to acknowledge. Control gates failed — Remote EMS disabled (master still on).
 
   - id: emhass_sigen_disable_on_bad_optim
     alias: EMHASS Sigen — disable when optim not Optimal
@@ -409,7 +395,7 @@ automation:
         data:
           title: "EMHASS D2: bad optim"
           message: >-
-            optim_status={{ states('sensor.optim_status') }} — Remote EMS disabled.
+            Action: Check EMHASS logs. optim_status={{ states('sensor.optim_status') }} — Remote EMS disabled.
 
   # --- SOC floor enforcement (Layer 2) ---
 
@@ -422,7 +408,7 @@ automation:
     trigger:
       - platform: numeric_state
         entity_id: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
-        below: input_number.emhass_min_soc_reserve
+        below: input_number.emhass_soc_min
       - platform: state
         entity_id: select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode
         to:
@@ -432,7 +418,7 @@ automation:
       # We must be below the reserve floor
       - condition: numeric_state
         entity_id: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
-        below: input_number.emhass_min_soc_reserve
+        below: input_number.emhass_soc_min
       # Only intervene if we are actively discharging
       - condition: template
         value_template: >-
@@ -444,13 +430,13 @@ automation:
         data:
           mode: idle
       - service: script.sigen_apply_idle_limits
-      - service: script.emhass_push_alert
+      - service: logbook.log
         data:
-          title: "EMHASS D4: SOC floor cutout"
+          name: "EMHASS EMS"
+          entity_id: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
           message: >-
             SOC {{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') }}% hit floor
-            ({{ states('input_number.emhass_min_soc_reserve') }}%).
-            Discharge stopped. Recovery charging will engage when EMHASS plans charge.
+            ({{ states('input_number.emhass_soc_min') }}%). Discharge stopped.
 
   # --- Recovery charging (Layer 3) ---
   # Pass through EMHASS charge plans even when emhass_control_allowed is off due to
@@ -467,9 +453,9 @@ automation:
       - platform: time_pattern
         minutes: "/30"
       # Also trigger immediately when floor cutout fires
-      - platform: state
-        entity_id: binary_sensor.emhass_fail_soc_extreme
-        to: "on"
+      - platform: numeric_state
+        entity_id: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
+        below: input_number.emhass_soc_min
     condition:
       - condition: state
         entity_id: input_boolean.emhass_auto_control_master
@@ -478,7 +464,7 @@ automation:
       - condition: template
         value_template: >-
           {% set soc = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(50) %}
-          {% set target = states('input_number.emhass_recovery_target_soc') | float(15) %}
+          {% set target = states('sensor.emhass_recovery_target_soc') | float(15) %}
           {{ soc < target }}
       # EMHASS must be planning a charge (p_batt negative) — this is the (d) choice
       - condition: template
@@ -514,12 +500,12 @@ automation:
       - service: script.sigen_apply_charge_limits
         data:
           watts: "{{ charge_limit }}"
-      - service: script.emhass_push_alert
+      - service: logbook.log
         data:
-          title: "EMHASS D5: recovery charge"
+          name: "EMHASS EMS"
+          entity_id: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
           message: >-
-            SOC {{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') }}% below
-            target {{ states('input_number.emhass_recovery_target_soc') }}%.
+            SOC {{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') }}% below target.
             Recovery charging at {{ charge_limit }} W (from EMHASS plan).
 
   - id: emhass_recovery_complete
@@ -528,16 +514,16 @@ automation:
     trigger:
       - platform: numeric_state
         entity_id: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
-        above: input_number.emhass_recovery_target_soc
+        above: sensor.emhass_recovery_target_soc
     condition:
       - condition: state
         entity_id: input_boolean.emhass_auto_control_master
         state: "on"
     action:
-      - service: script.emhass_push_alert
+      - service: logbook.log
         data:
-          title: "EMHASS D5: recovery complete"
+          name: "EMHASS EMS"
+          entity_id: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
           message: >-
-            SOC {{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') }}% reached
-            recovery target {{ states('input_number.emhass_recovery_target_soc') }}%.
+            SOC {{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') }}% reached recovery target.
             Normal MPC control resumed.

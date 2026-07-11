@@ -83,6 +83,8 @@ class NaiveMpcPayloadTests(unittest.TestCase):
                 "soc_final": 0.6,
                 "prediction_horizon": 3,
                 "load_power_forecast": [450.0, 300.0, 300.0],
+                "alpha": 1.0,
+                "beta": 0.0,
             },
         )
 
@@ -100,6 +102,8 @@ class NaiveMpcPayloadTests(unittest.TestCase):
                 "weather_forecast_cache_only": True,
                 "prediction_horizon": 2,
                 "load_power_forecast": [300.0, 300.0],
+                "alpha": 1.0,
+                "beta": 0.0,
             },
         )
 

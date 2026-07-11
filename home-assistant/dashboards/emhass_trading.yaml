@@ -14,6 +14,11 @@ views:
           - entity: input_select.emhass_ems_mode_native
           - entity: input_number.emhass_soc_min
           - entity: input_number.emhass_soc_max
+          - entity: sensor.emhass_recovery_target_soc
+          - entity: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
+          - entity: sensor.__SIGEN_PLANT_SLUG___plant_battery_power
+          - entity: __P1_POWER_NET_ENTITY__
+            name: P1 grid net (+ import, − export)
           - entity: sensor.emhass_plan_active_step
           - type: attribute
             entity: binary_sensor.emhass_control_allowed

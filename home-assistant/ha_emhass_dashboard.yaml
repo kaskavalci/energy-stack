@@ -121,6 +121,14 @@ template:
             {% endif %}
           {% endif %}
 
+      - name: EMHASS recovery target SOC
+        unique_id: emhass_recovery_target_soc
+        default_entity_id: sensor.emhass_recovery_target_soc
+        unit_of_measurement: "%"
+        state: >
+          {% set min_soc = states('input_number.emhass_soc_min') | float(5) %}
+          {{ [min_soc + 5, 100] | min }}
+
   - binary_sensor:
       - name: EMHASS plan valid
         unique_id: emhass_plan_valid
@@ -133,43 +141,80 @@ template:
         default_entity_id: binary_sensor.emhass_control_allowed
         device_class: running
         state: >
-          {% set ns = namespace(ok=true) %}
-          {% if not is_state('input_boolean.emhass_auto_control_master', 'on') %}
-            {% set ns.ok = false %}
-          {% endif %}
-          {% if not is_state('sensor.optim_status', 'Optimal') %}
-            {% set ns.ok = false %}
-          {% endif %}
           {% set pb = states('sensor.p_batt_forecast') %}
-          {% if pb in ['unknown', 'unavailable', 'none', ''] %}
-            {% set ns.ok = false %}
-          {% elif (pb | float(none)) is none %}
-            {% set ns.ok = false %}
-          {% endif %}
-          {% if ns.ok %}
-            {% set age = (now() - states.sensor.p_batt_forecast.last_updated).total_seconds() %}
-            {% if age > 35 * 60 %}
-              {% set ns.ok = false %}
-            {% endif %}
-          {% endif %}
           {% set soc = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(none) %}
-          {% set min_soc = states('input_number.emhass_min_soc_reserve') | float(10) %}
-          {% if soc is none or soc < min_soc or soc > 100 %}
-            {% set ns.ok = false %}
-          {% endif %}
+          {% set min_soc = states('input_number.emhass_soc_min') | float(5) %}
           {% set pf = states('sensor.emhass_prices_fetched_at') %}
-          {% if pf not in ['unknown', 'unavailable', 'none', ''] %}
-            {% set pf_age = (now() - states.sensor.emhass_prices_fetched_at.last_changed).total_seconds() %}
-            {% if pf_age > 26 * 3600 %}
-              {% set ns.ok = false %}
-            {% endif %}
+          {% set ns = namespace(reason='ok') %}
+          {% if not is_state('input_boolean.emhass_auto_control_master', 'on') %}
+            {% set ns.reason = 'master_off' %}
+          {% elif soc is none or soc > 100 %}
+            {% set ns.reason = 'soc_invalid' %}
+          {% elif pf not in ['unknown', 'unavailable', 'none', ''] and (now() - states.sensor.emhass_prices_fetched_at.last_changed).total_seconds() > 26 * 3600 %}
+            {% set ns.reason = 'prices_stale' %}
+          {% elif pb in ['unknown', 'unavailable', 'none', ''] or (pb | float(none)) is none %}
+            {% set ns.reason = 'plan_missing' %}
+          {% elif (now() - states.sensor.p_batt_forecast.last_updated).total_seconds() > 35 * 60 %}
+            {% set ns.reason = 'plan_stale' %}
+          {% elif not is_state('sensor.optim_status', 'Optimal') %}
+            {% set ns.reason = 'optim_not_optimal' %}
+          {% elif soc < min_soc %}
+            {% set ns.reason = 'soc_below_floor' %}
           {% endif %}
-          {{ ns.ok }}
+          {{ ns.reason == 'ok' }}
         attributes:
+          block_reason: >
+            {% set pb = states('sensor.p_batt_forecast') %}
+            {% set soc = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(none) %}
+            {% set min_soc = states('input_number.emhass_soc_min') | float(5) %}
+            {% set pf = states('sensor.emhass_prices_fetched_at') %}
+            {% if not is_state('input_boolean.emhass_auto_control_master', 'on') %}
+              master_off
+            {% elif soc is none or soc > 100 %}
+              soc_invalid
+            {% elif pf not in ['unknown', 'unavailable', 'none', ''] and (now() - states.sensor.emhass_prices_fetched_at.last_changed).total_seconds() > 26 * 3600 %}
+              prices_stale
+            {% elif pb in ['unknown', 'unavailable', 'none', ''] or (pb | float(none)) is none %}
+              plan_missing
+            {% elif (now() - states.sensor.p_batt_forecast.last_updated).total_seconds() > 35 * 60 %}
+              plan_stale
+            {% elif not is_state('sensor.optim_status', 'Optimal') %}
+              optim_not_optimal
+            {% elif soc < min_soc %}
+              soc_below_floor
+            {% else %}
+              ok
+            {% endif %}
+          block_action: >
+            {% set pb = states('sensor.p_batt_forecast') %}
+            {% set soc = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(none) %}
+            {% set min_soc = states('input_number.emhass_soc_min') | float(5) %}
+            {% set pf = states('sensor.emhass_prices_fetched_at') %}
+            {% if not is_state('input_boolean.emhass_auto_control_master', 'on') %}
+              Turn on master switch to resume control.
+            {% elif soc is none or soc > 100 %}
+              Check sigenergy2mqtt battery sensors.
+            {% elif pf not in ['unknown', 'unavailable', 'none', ''] and (now() - states.sensor.emhass_prices_fetched_at.last_changed).total_seconds() > 26 * 3600 %}
+              Check Zonneplan integration and emhass-cron on energy host.
+            {% elif pb in ['unknown', 'unavailable', 'none', ''] or (pb | float(none)) is none %}
+              Wait for next MPC run or check energy host.
+            {% elif (now() - states.sensor.p_batt_forecast.last_updated).total_seconds() > 35 * 60 %}
+              Check emhass-cron and EMHASS logs on energy host.
+            {% elif not is_state('sensor.optim_status', 'Optimal') %}
+              Check EMHASS logs for solver infeasibility.
+            {% elif soc < min_soc %}
+              Wait for recovery charge plan.
+            {% else %}
+              None.
+            {% endif %}
           master_on: "{{ is_state('input_boolean.emhass_auto_control_master', 'on') }}"
           optim_status: "{{ states('sensor.optim_status') }}"
           p_batt_forecast: "{{ states('sensor.p_batt_forecast') }}"
           p_batt_age_min: >
-            {{ ((now() - states.sensor.p_batt_forecast.last_updated).total_seconds() / 60)
-               | round(1) }}
+            {% set pb = states.sensor.p_batt_forecast %}
+            {% if pb is not none and pb.state not in ['unknown', 'unavailable', 'none', ''] %}
+              {{ ((now() - pb.last_updated).total_seconds() / 60) | round(1) }}
+            {% else %}
+              0.0
+            {% endif %}
           battery_soc: "{{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') }}"

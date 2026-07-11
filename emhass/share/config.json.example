@@ -3,7 +3,7 @@
   "costfun": "profit",
   "optimization_time_step": 30,
   "prediction_horizon": 32,
-  "historic_days_to_retrieve": 2,
+  "historic_days_to_retrieve": 1,
   "method_ts_round": "nearest",
   "continual_publish": false,
   "data_path": "default",
@@ -21,13 +21,12 @@
   "weight_battery_charge": 0,
   "sensor_power_photovoltaics": "sensor.emhass_pv_power_w",
   "sensor_power_photovoltaics_forecast": "sensor.p_pv_forecast",
-  "sensor_power_load_no_var_loads": "sensor.emhass_house_load_power_w",
+  "sensor_power_load_no_var_loads": "sensor.electricity_meter_power_consumption",
   "sensor_replace_zero": [
     "sensor.emhass_pv_power_w"
   ],
   "sensor_linear_interp": [
-    "sensor.emhass_pv_power_w",
-    "sensor.emhass_house_load_power_w"
+    "sensor.emhass_pv_power_w"
   ],
   "use_websocket": false,
   "use_influxdb": false,
@@ -51,7 +50,7 @@
   "open_meteo_cache_max_age": 120,
   "load_forecast_method": "naive",
   "model_type": "load_forecast",
-  "var_model": "sensor.emhass_house_load_power_w",
+  "var_model": "sensor.electricity_meter_power_consumption",
   "sklearn_model": "KNeighborsRegressor",
   "num_lags": 48,
   "split_date_delta": "48h",

@@ -74,6 +74,8 @@ DEFAULT_EXPORT_PRICE_HAIRCUT = _env_float("EXPORT_PRICE_HAIRCUT_EUR_PER_KWH", 0.
 DEFAULT_PREDICTION_HORIZON = 32
 LOAD_FORECAST_CONSTANT_W = 300.0
 LOAD_FORECAST_MODE = "constant_300w"
+LOAD_FORECAST_MIX_ALPHA = 1.0
+LOAD_FORECAST_MIX_BETA = 0.0
 MIN_PRICE_SLOTS = 12  # 6 h @ 30 min — below this, abort MPC
 # Keep in sync with check_weather_failure_in_last_mpc in health_notify.py (B4)
 WEATHER_FAILURE_KEYWORDS = (
@@ -626,6 +628,8 @@ def build_naive_mpc_payload(
         "weather_forecast_cache_only": True,
         "prediction_horizon": prediction_horizon,
         "load_power_forecast": build_load_power_forecast(prediction_horizon, first_slot_load),
+        "alpha": LOAD_FORECAST_MIX_ALPHA,
+        "beta": LOAD_FORECAST_MIX_BETA,
     }
     if soc_init is not None:
         payload["soc_init"] = soc_init
