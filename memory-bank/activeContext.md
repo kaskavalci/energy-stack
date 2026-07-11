@@ -1,28 +1,44 @@
 # Active Context
 
-**Last updated:** 2026-07-11
+**Last updated:** 2026-07-11 (afternoon CEST)  
+**Author:** Auto
 
 ## Current focus
 
-**MPC recovery (2026-07-11)** — MPC was failing since ~Jul 10 17:31 CEST: live `config.json` still pointed load keys at `sensor.emhass_house_load_power_w` (HA history HTTP 500). Fixed by:
-1. Load history placeholder → `sensor.zonneplan_current_electricity_tariff` (stable recorder; actual load still constant 300 W via runtime list).
-2. Deleted `/data/params.pkl` + `emhass` restart after sensor change.
-3. Fixed `secrets_emhass.yaml` `hass_url` trailing slash (`http://192.168.0.109:8123/`) — without it `publish-data` failed posting to `8123api/states/...`.
-4. Synced `emhass-cron/fetch_prices_emhass.py` with `alpha=1.0` / `beta=0.0` safe-blending constants.
+**MPC recovered (2026-07-11 ~13:28 CEST)** after PV history placeholder fix on energy host.
 
-Verified: `mpc.ok: true` at 2026-07-11 06:26 CEST; fresh `sensor.p_batt_forecast` and 32-slot plan in HA.
+| Window (CEST) | Failure mode | Evidence |
+|---|---|---|
+| 07:30 – 09:30 | `ValueError: cannot convert float NaN to integer` in `get_mix_forecast` | emhass traceback; weather-cache gap |
+| 10:00 – 13:23 | HA history HTTP **500** on `sensor.emhass_pv_power_w` | bad recorder hour **07:00 UTC** Jul 11 |
+| 13:23 | Zonneplan placeholder for PV **rejected** by EMHASS | `sensor.power_photovoltaics and sensor.power_load_no_var_loads should not be the same` |
+| 13:28 | **Recovery** with `sensor.p_pv_forecast` PV placeholder | `last_enever_run.json` → `mpc.ok: true` |
 
-**Revert target:** When `sensor.electricity_meter_power_consumption` full-day history returns HTTP 200 for EMHASS’s “yesterday” window, switch load keys back from Zonneplan placeholder. **Re-test from 2026-07-12 00:00 UTC** (yesterday becomes Jul 11, which already returns 200). Jul 10 full-day queries still fail (HTTP 500) due to **corrupted recorder hour 14:00–15:00 UTC** on all P1 power sensors — not entity recreation (registry `created_at` May 22–23). Optional: purge/repair that hour in HA recorder to unblock sooner.
+**Live config state (energy host):**
+- Load keys → `sensor.zonneplan_current_electricity_tariff`
+- PV keys → `sensor.p_pv_forecast` (`sensor_power_photovoltaics`, `sensor_linear_interp`, `sensor_replace_zero`)
+- `hass_url` trailing slash retained
+
+**P1 / recorder:** Jul 11 full-day history still HTTP 500 for P1 and `sensor.emhass_pv_power_w` (bad hour 07 UTC). Jul 10 still bad at hour 14 UTC. Zonneplan tariff and `sensor.p_pv_forecast` Jul 11 full-day → HTTP 200.
+
+**Proper fix:** repair HA recorder Jul 11 07 UTC + Jul 10 14 UTC. Revert placeholders only after full-day history HTTP 200 for affected sensors.
+
+## Repo work queue (before deploy)
+
+**P0 (this session):** `config.json.example` placeholders, alpha/beta doc reconciliation, `fetch_current_load` unit tests — landed in repo commit pending.
+
+**P1 at deploy:** `emhass_recovery_complete` guard, SOC floor migration notes (10%→5%), `block_reason` vs policy alignment, `render-ha-packages.sh` + merge test.
+
+Full schedule: `memory-bank/progress.md` § "What needs to be done, when".
+
+## Other open items
+
+- **Stale SOC sensor** — `sensor.sigen_0_plant_battery_soc` stuck at 10.7% since Jul 10 23:00 UTC (sigenergy2mqtt); investigate separately from MPC
+- **SOC execution headroom** — `memory-bank/notebook/emhass-soc-min-trading.md` (proposed, not implemented)
 
 **Actionable Alerts Policy (HA)** — Deployed (2026-07-01). See `memory-bank/notebook/emhass-actionable-alerts-policy.md`.
 
 **Load forecast** — constant 300 W per MPC slot; `sensor.emhass_house_load_power_w` for observability only (not EMHASS config).
-
-## Next tasks
-
-1. **SOC execution headroom** — `memory-bank/notebook/emhass-soc-min-trading.md` (proposed, not implemented)
-2. **P1 history stability** — monitor `electricity_meter_power_*` history API; revert load placeholder when stable
-3. **Stale SOC sensor** — `sensor.sigen_0_plant_battery_soc` stuck at 10.7% since Jul 10 23:00 (sigenergy2mqtt); investigate separately
 
 ## Verification
 
@@ -39,4 +55,6 @@ docker compose exec -T emhass-cron python3 /app/fetch_prices_emhass.py --action 
 ## Assumptions
 
 - Live `config.json` on energy host may differ from git — verify via `ENERGY_REMOTE_HOST` / `ENERGY_REMOTE_DIR` in `config/site.env`.
+- EMHASS requires load and PV history sensor keys to differ; Zonneplan tariff cannot serve both roles.
 - Deploy reterminal HA packages before energy-stack HA packages (P1 aliases).
+- Placeholder revert only after HA recorder repair and full-day history HTTP 200 for affected sensors.

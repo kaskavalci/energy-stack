@@ -1,7 +1,10 @@
 import importlib.util
+import math
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
+from urllib.error import HTTPError
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -63,6 +66,58 @@ class ResolveSocFinalTests(unittest.TestCase):
                 soc_min=0.05,
                 share_dir=Path("/nonexistent"),
             ),
+        )
+
+
+class FetchCurrentLoadTests(unittest.TestCase):
+    def setUp(self):
+        self.secrets = Path("/tmp/test_secrets_emhass.yaml")
+        self.sensor = "sensor.electricity_meter_power_consumption"
+
+    @patch.object(fetch_prices_emhass, "fetch_ha_state")
+    def test_http_error_falls_back_to_300w(self, mock_fetch):
+        mock_fetch.side_effect = HTTPError(
+            url="http://ha/api/states/x",
+            code=500,
+            msg="Internal Server Error",
+            hdrs=None,
+            fp=None,
+        )
+        self.assertEqual(
+            fetch_prices_emhass.fetch_current_load(self.secrets, self.sensor),
+            300.0,
+        )
+
+    @patch.object(fetch_prices_emhass, "fetch_ha_state")
+    def test_unavailable_state_falls_back_to_300w(self, mock_fetch):
+        mock_fetch.return_value = {"state": "unavailable"}
+        self.assertEqual(
+            fetch_prices_emhass.fetch_current_load(self.secrets, self.sensor),
+            300.0,
+        )
+
+    @patch.object(fetch_prices_emhass, "fetch_ha_state")
+    def test_unknown_state_falls_back_to_300w(self, mock_fetch):
+        mock_fetch.return_value = {"state": "unknown"}
+        self.assertEqual(
+            fetch_prices_emhass.fetch_current_load(self.secrets, self.sensor),
+            300.0,
+        )
+
+    @patch.object(fetch_prices_emhass, "fetch_ha_state")
+    def test_nan_state_falls_back_to_300w(self, mock_fetch):
+        mock_fetch.return_value = {"state": str(math.nan)}
+        self.assertEqual(
+            fetch_prices_emhass.fetch_current_load(self.secrets, self.sensor),
+            300.0,
+        )
+
+    @patch.object(fetch_prices_emhass, "fetch_ha_state")
+    def test_happy_path_returns_rounded_watts(self, mock_fetch):
+        mock_fetch.return_value = {"state": "450.678"}
+        self.assertEqual(
+            fetch_prices_emhass.fetch_current_load(self.secrets, self.sensor),
+            450.68,
         )
 
 

@@ -34,3 +34,7 @@ Instead of passing `alpha` and `beta` to EMHASS (which forces EMHASS to perform 
 
 ## Error Handling
 - The `fetch_current_load` function will trap `HTTPError`, `URLError`, `ValueError`, and `TypeError`. Upon failure, it logs a non-fatal warning (e.g., `Could not read current load from HA (...): HTTP Error 502`) and returns `300.0`. This ensures that a struggling HA instance does not abort the entire MPC run.
+
+---
+
+**Footnote (2026-07-11):** `fetch_current_load` and pre-blended `load_power_forecast` are implemented. `alpha`/`beta` remain in the MPC payload because they were not removed yet. They do **not** skip EMHASS internal HA history fetches for `config.json` sensor keys — Jul 2026 MPC outages were fixed with sensor placeholders (`sensor.zonneplan_current_electricity_tariff` for load; `sensor.p_pv_forecast` for PV when `sensor.emhass_pv_power_w` history returns HTTP 500). EMHASS rejects identical load and PV sensor entities.
