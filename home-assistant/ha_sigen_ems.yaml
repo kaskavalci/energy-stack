@@ -476,12 +476,14 @@ automation:
       - condition: state
         entity_id: sensor.optim_status
         state: "Optimal"
+      - condition: state
+        entity_id: sensor.emhass_mpc_status
+        state: "ok"
       - condition: template
         value_template: >-
-          {% set pb = states('sensor.p_batt_forecast') %}
-          {% if pb in ['unknown', 'unavailable', 'none', ''] %}false
-          {% else %}{{ (now() - states.sensor.p_batt_forecast.last_updated).total_seconds() < 35 * 60 }}
-          {% endif %}
+          {% set generated = state_attr('sensor.emhass_mpc_status', 'plan_generated_at') %}
+          {% set generated_ts = as_timestamp(generated, 0) %}
+          {{ generated_ts > 0 and as_timestamp(now()) - generated_ts < 40 * 60 }}
       # Rate limit: no writes within 5 min
       - condition: template
         value_template: >-

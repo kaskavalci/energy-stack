@@ -19,3 +19,4 @@ emhass/share/last_enever_run.json
 emhass/share/config.json.bak*
 
 memory-bank/notebook/
+.worktrees/
