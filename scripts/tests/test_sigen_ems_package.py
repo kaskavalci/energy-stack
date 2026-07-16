@@ -104,5 +104,25 @@ class SigenNativeRestoreTests(unittest.TestCase):
         self.assertIn("service: script.sigen_restore_native_control", disable)
 
 
+class SigenReconnectReconciliationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.automation = automation_block(
+            "emhass_sigen_enforce_master_off",
+            "emhass_sigen_apply_plan_scheduled",
+        )
+
+    def test_reconnect_and_ha_start_have_distinct_trigger_ids(self) -> None:
+        self.assertIn("- id: command_mode", self.automation)
+        self.assertIn("- id: reconnect", self.automation)
+        self.assertIn("- id: ha_start", self.automation)
+        self.assertIn("platform: homeassistant", self.automation)
+        self.assertIn('"unknown"', self.automation)
+        self.assertIn('"unavailable"', self.automation)
+
+    def test_native_reconnect_and_ha_start_are_not_filtered_out(self) -> None:
+        self.assertIn("trigger.id in ['reconnect', 'ha_start']", self.automation)
+        self.assertIn("service: script.sigen_disable_remote_ems", self.automation)
+
+
 if __name__ == "__main__":
     unittest.main()

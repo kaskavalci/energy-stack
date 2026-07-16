@@ -367,31 +367,37 @@ automation:
       - service: script.sigen_disable_remote_ems
 
   - id: emhass_sigen_enforce_master_off
-    alias: EMHASS Sigen — enforce master off when reconnecting
-    mode: single
+    alias: EMHASS Sigen — enforce master off after start or reconnect
+    mode: restart
     trigger:
-      - platform: state
+      - id: command_mode
+        platform: state
         entity_id: select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode
         to:
           - "Command Discharging (Output power from PV first)"
           - "Command Discharging (Output power from the battery first)"
           - "Command Charging (Consume power from the grid first)"
-      - platform: state
+      - id: reconnect
+        platform: state
         entity_id: select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode
         from:
           - "unknown"
           - "unavailable"
+      - id: ha_start
+        platform: homeassistant
+        event: start
     condition:
       - condition: state
         entity_id: input_boolean.emhass_auto_control_master
         state: "off"
       - condition: template
         value_template: >-
-          {{ states('select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode') in [
-               'Command Discharging (Output power from PV first)',
-               'Command Discharging (Output power from the battery first)',
-               'Command Charging (Consume power from the grid first)'
-             ] }}
+          {{ trigger.id in ['reconnect', 'ha_start']
+             or states('select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode') in [
+                  'Command Discharging (Output power from PV first)',
+                  'Command Discharging (Output power from the battery first)',
+                  'Command Charging (Consume power from the grid first)'
+                ] }}
     action:
       - service: script.sigen_disable_remote_ems
 
