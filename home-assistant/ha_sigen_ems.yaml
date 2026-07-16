@@ -116,7 +116,12 @@ script:
             unit_of_measurement: W
     sequence:
       - variables:
-          limit_kw: "{{ (watts | float(0) / 1000) | round(2) }}"
+          requested_kw: "{{ [0, (watts | float(0) / 1000)] | max | round(2) }}"
+          device_max_kw: >-
+            {{ state_attr('number.__SIGEN_PLANT_SLUG___plant_max_charging_limit', 'max')
+               | float(0) }}
+          limit_kw: >-
+            {{ [requested_kw | float(0), device_max_kw | float(0)] | min | round(2) }}
       - service: number.set_value
         target:
           entity_id: number.__SIGEN_PLANT_SLUG___plant_max_charging_limit
@@ -147,7 +152,12 @@ script:
             unit_of_measurement: W
     sequence:
       - variables:
-          limit_kw: "{{ (watts | float(0) / 1000) | round(2) }}"
+          requested_kw: "{{ [0, (watts | float(0) / 1000)] | max | round(2) }}"
+          device_max_kw: >-
+            {{ state_attr('number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit', 'max')
+               | float(0) }}
+          limit_kw: >-
+            {{ [requested_kw | float(0), device_max_kw | float(0)] | min | round(2) }}
       - service: number.set_value
         target:
           entity_id: number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit
