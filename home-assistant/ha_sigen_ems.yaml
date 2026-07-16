@@ -196,27 +196,97 @@ script:
 
   sigen_restore_native_control:
     alias: Sigen restore native control
-    description: Restore native Maximum Self-consumption mode and restore max power limits so the BMS can operate freely.
-    mode: single
+    description: >-
+      Return control to native Maximum Self-consumption, restore device-valid
+      operator limits, and record success only after Sigenergy confirms both phases.
+    mode: restart
     sequence:
+      - variables:
+          native_mode: "{{ states('input_select.emhass_ems_mode_native') }}"
+          charge_cap_kw: >-
+            {{ [0, (states('input_number.emhass_max_charge_cap_w')
+                      | float(0) / 1000)] | max | round(2) }}
+          discharge_cap_kw: >-
+            {{ [0, (states('input_number.emhass_max_discharge_cap_w')
+                      | float(0) / 1000)] | max | round(2) }}
       - service: select.select_option
         continue_on_error: true
         target:
           entity_id: select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode
         data:
-          option: "{{ states('input_select.emhass_ems_mode_native') }}"
+          option: "{{ native_mode }}"
+      - wait_template: >-
+          {% set bad = ['unknown', 'unavailable', 'none', ''] %}
+          {{ is_state('select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode', native_mode)
+             and states('number.__SIGEN_PLANT_SLUG___plant_max_charging_limit') not in bad
+             and states('number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit') not in bad
+             and (state_attr('number.__SIGEN_PLANT_SLUG___plant_max_charging_limit', 'max')
+                  | float(0)) > 0
+             and (state_attr('number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit', 'max')
+                  | float(0)) > 0 }}
+        timeout: "00:01:15"
+        continue_on_timeout: true
+      - if:
+          - condition: template
+            value_template: "{{ not wait.completed }}"
+        then:
+          - service: script.emhass_push_alert
+            data:
+              title: "EMHASS D2: Native fallback mode confirmation failed"
+              message: >-
+                Master is off, but Sigenergy did not confirm native mode and available
+                limit entities within 75 seconds. Keep EMHASS control disabled.
+          - stop: "Native fallback mode confirmation failed"
+            error: true
+      - variables:
+          charge_device_max_kw: >-
+            {{ state_attr('number.__SIGEN_PLANT_SLUG___plant_max_charging_limit', 'max')
+               | float(0) }}
+          discharge_device_max_kw: >-
+            {{ state_attr('number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit', 'max')
+               | float(0) }}
+          charge_target_kw: >-
+            {{ [charge_cap_kw | float(0), charge_device_max_kw | float(0)]
+               | min | round(2) }}
+          discharge_target_kw: >-
+            {{ [discharge_cap_kw | float(0), discharge_device_max_kw | float(0)]
+               | min | round(2) }}
       - service: number.set_value
         continue_on_error: true
         target:
           entity_id: number.__SIGEN_PLANT_SLUG___plant_max_charging_limit
         data:
-          value: "{{ (states('input_number.emhass_max_charge_cap_w') | float(9000) / 1000) | round(2) }}"
+          value: "{{ charge_target_kw }}"
       - service: number.set_value
         continue_on_error: true
         target:
           entity_id: number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit
         data:
-          value: "{{ (states('input_number.emhass_max_discharge_cap_w') | float(9000) / 1000) | round(2) }}"
+          value: "{{ discharge_target_kw }}"
+      - wait_template: >-
+          {% set charge_actual_kw =
+               states('number.__SIGEN_PLANT_SLUG___plant_max_charging_limit') | float(none) %}
+          {% set discharge_actual_kw =
+               states('number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit') | float(none) %}
+          {{ charge_actual_kw is not none
+             and discharge_actual_kw is not none
+             and ((charge_actual_kw - (charge_target_kw | float(0))) | abs) <= 0.02
+             and ((discharge_actual_kw - (discharge_target_kw | float(0))) | abs) <= 0.02 }}
+        timeout: "00:00:30"
+        continue_on_timeout: true
+      - if:
+          - condition: template
+            value_template: "{{ not wait.completed }}"
+        then:
+          - service: script.emhass_push_alert
+            data:
+              title: "EMHASS D2: Native fallback limit confirmation failed"
+              message: >-
+                Sigenergy is in native mode, but limits did not converge to
+                charge={{ charge_target_kw }} kW and discharge={{ discharge_target_kw }} kW
+                within 30 seconds. Keep EMHASS control disabled.
+          - stop: "Native fallback limit confirmation failed"
+            error: true
       - service: input_datetime.set_datetime
         target:
           entity_id: input_datetime.emhass_last_limit_write
@@ -226,7 +296,7 @@ script:
   sigen_disable_remote_ems:
     alias: Sigen disable Remote EMS control
     description: Restore limits and set self-consumption mode when master is turned off.
-    mode: single
+    mode: restart
     sequence:
       - service: script.sigen_restore_native_control
 
