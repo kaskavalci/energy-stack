@@ -1,7 +1,25 @@
 # Active Context
 
-**Last updated:** 2026-07-11 (afternoon CEST)  
-**Author:** Auto
+**Last updated:** 2026-07-16
+**Author:** Cursor Grok 4.5
+
+## Sigenergy native fallback verified (2026-07-16)
+
+- HA package deploy: successful `ha core check` and Core restart.
+- HA-start reconciliation with master off: native mode confirmed; charge limit
+  `8.8` kW and discharge limit `9.0` kW confirmed before
+  `emhass_last_limit_write` advanced.
+- Direct master-off: native mode and the same `8.8`/`9.0` kW limits confirmed
+  before `emhass_last_limit_write` advanced.
+- `sigenergy2mqtt` reconnect with master off: native restoration reran and
+  confirmed the same `8.8`/`9.0` kW targets.
+- Trading resume: at the 10:30 boundary, control gate `ok`, mode `Standby`
+  matching `p_batt_forecast=0`, and `emhass_last_limit_write=2026-07-16 10:30:00`.
+- Follow-up: the 10:30 EMHASS MPC HTTP call returned 500 after that apply;
+  `sensor.emhass_mpc_status` is `failed` while master remains on with standby
+  idle limits. Investigate EMHASS separately; do not treat this as a native-
+  fallback regression. `sigenergy2mqtt` config was migrated to the 2026.4 list
+  schema (`modbus: [{host, inverters}]`, `mqtt.broker`).
 
 ## Current focus
 
