@@ -25,6 +25,14 @@
 - Price fetch failure → **abort MPC**
 - Weather retry → `clear_weather_cache_files()` before `weather-forecast-cache`
 - Shared stale logic: `lib/weather_cache_stale.py`
+- Master-off or control-failure fallback selects Sigenergy native
+  `Maximum Self-consumption (Default)` automatically; operators do not select it
+  during healthy MPC trading.
+- Every Sigenergy charge/discharge limit is clamped to the MQTT number entity's
+  advertised `max`; native restoration is successful only after mode and both
+  limits are confirmed, then `emhass_last_limit_write` advances.
+- Home Assistant start or a Sigenergy mode reconnect while the master is off
+  reruns native restoration even when the returned mode is already native.
 
 ## Deploy
 

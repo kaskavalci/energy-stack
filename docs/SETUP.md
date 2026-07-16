@@ -79,6 +79,26 @@ Requires `config/site.env` (run `setup-local.sh` first). `emhass-cron` and `ener
 docker compose up -d
 ```
 
+## Sigenergy native fallback
+
+`input_boolean.emhass_auto_control_master` controls whether EMHASS may use
+Sigenergy command modes. Turning it off does not require an operator to select an
+inverter mode manually: `script.sigen_restore_native_control` selects
+`Maximum Self-consumption (Default)` automatically.
+
+Restoration is successful only when Home Assistant confirms all of the following:
+
+1. The Remote EMS control mode is `Maximum Self-consumption (Default)`.
+2. The charging and discharging limit entities are available.
+3. Each restored limit equals the smaller of its operator cap and the device's
+   MQTT-advertised `max` attribute, within 0.02 kW.
+4. `input_datetime.emhass_last_limit_write` advances after those confirmations.
+
+If mode or limit confirmation times out, keep the master off and investigate the
+`EMHASS D2` notification. Home Assistant start or a Sigenergy mode-entity reconnect
+while the master is off reruns the same restoration transaction, including when
+the inverter reports native mode immediately.
+
 ## Security notes
 
 - Do not expose EMHASS port **5000** or Mosquitto **1883** to the internet without authentication.
