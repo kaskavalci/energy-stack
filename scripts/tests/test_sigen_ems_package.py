@@ -124,5 +124,27 @@ class SigenReconnectReconciliationTests(unittest.TestCase):
         self.assertIn("service: script.sigen_disable_remote_ems", self.automation)
 
 
+class EmhassPlanValidityPresentationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.package = (
+            REPO_ROOT / "home-assistant" / "ha_emhass_dashboard.yaml"
+        ).read_text(encoding="utf-8")
+
+    def test_valid_plan_stays_positive_and_problem_is_separate(self) -> None:
+        valid = self.package.split(
+            "      - name: EMHASS plan valid\n", 1
+        )[1].split("      - name: EMHASS plan problem\n", 1)[0]
+        self.assertNotIn("device_class: problem", valid)
+        self.assertIn("      - name: EMHASS plan problem\n", self.package)
+        problem = self.package.split(
+            "      - name: EMHASS plan problem\n", 1
+        )[1].split("      - name: EMHASS control allowed\n", 1)[0]
+        self.assertIn("device_class: problem", problem)
+        self.assertIn(
+            'state: "{{ not is_state(\'sensor.optim_status\', \'Optimal\') }}"',
+            problem,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

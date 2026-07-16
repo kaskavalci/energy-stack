@@ -9,6 +9,7 @@ views:
         entities:
           - entity: sensor.optim_status
           - entity: binary_sensor.emhass_plan_valid
+          - entity: binary_sensor.emhass_plan_problem
           - entity: binary_sensor.emhass_control_allowed
           - entity: input_boolean.emhass_auto_control_master
           - entity: input_select.emhass_ems_mode_native
