@@ -1,7 +1,41 @@
 # Active Context
 
-**Last updated:** 2026-07-11 (afternoon CEST)  
-**Author:** Auto
+**Last updated:** 2026-07-17
+**Author:** Cursor Grok 4.5
+
+## EMHASS native PV panel deployment verified (2026-07-17)
+
+- EMHASS cached parameters and the fresh Open-Meteo cache match the configured
+  Dutch site and time zone; no Alpine image defaults remain in use.
+- Home Assistant passed configuration checks before and after its single checked
+  restart. The live panel contains the native hourly statistics graph and
+  today-only PV forecast table, with no custom chart or ApexCharts resource.
+- One normal post-restart MPC exited `0`; prices, weather cache, naive MPC, and
+  publish stages completed. The current run artifact reports `mpc.ok=true`, HA
+  reports `optim_status=Optimal`, and all 26 published forecast rows are current.
+- EMHASS is running and healthy; `emhass-cron` and `energy-monitor` are running.
+  The EMHASS master was `on` before and after the MPC and was never toggled.
+- Preserve the verified Task 7 Home Assistant backup at
+  `/mnt/data/supervisor/homeassistant/backups/energy-stack-20260717-102948/`;
+  it contains `configuration.yaml`.
+
+## Sigenergy native fallback verified (2026-07-16)
+
+- HA package deploy: successful `ha core check` and Core restart.
+- HA-start reconciliation with master off: native mode confirmed; charge limit
+  `8.8` kW and discharge limit `9.0` kW confirmed before
+  `emhass_last_limit_write` advanced.
+- Direct master-off: native mode and the same `8.8`/`9.0` kW limits confirmed
+  before `emhass_last_limit_write` advanced.
+- `sigenergy2mqtt` reconnect with master off: native restoration reran and
+  confirmed the same `8.8`/`9.0` kW targets.
+- Trading resume: at the 10:30 boundary, control gate `ok`, mode `Standby`
+  matching `p_batt_forecast=0`, and `emhass_last_limit_write=2026-07-16 10:30:00`.
+- Follow-up: the 10:30 EMHASS MPC HTTP call returned 500 after that apply;
+  `sensor.emhass_mpc_status` is `failed` while master remains on with standby
+  idle limits. Investigate EMHASS separately; do not treat this as a native-
+  fallback regression. `sigenergy2mqtt` config was migrated to the 2026.4 list
+  schema (`modbus: [{host, inverters}]`, `mqtt.broker`).
 
 ## Current focus
 

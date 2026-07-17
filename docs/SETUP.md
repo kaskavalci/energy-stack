@@ -21,7 +21,7 @@ Creates gitignored files from examples:
 
 | File | Purpose |
 |------|---------|
-| `config/site.env` | Hosts, SSH, entity IDs, Modbus |
+| `config/site.env` | Hosts, SSH, entity IDs, Modbus, Open-Meteo location |
 | `emhass/secrets_emhass.yaml` | HA URL + long-lived token |
 | `emhass/share/config.json` | EMHASS plant parameters |
 | `sigenergy/sigenergy2mqtt.yaml` | Modbus target |
@@ -32,6 +32,17 @@ Edit `config/site.env` and `emhass/secrets_emhass.yaml`, then re-render:
 ```bash
 ./scripts/render-ha-packages.sh
 ```
+
+## EMHASS / Open-Meteo location
+
+Set `LAT`, `LON`, `ALT`, `TIME_ZONE`, and `TZ` in `config/site.env`. Copy the
+coordinates and elevation from Home Assistant under **Settings → System →
+General**. `TIME_ZONE` and `TZ` must be the same IANA timezone, for example
+`Europe/Amsterdam`.
+
+`deploy-energy-stack.sh` validates these values before uploading anything and
+recreates EMHASS so cached parameters cannot retain the container image's
+default location.
 
 ## Home Assistant secrets
 
@@ -73,11 +84,32 @@ Find your Envoy entity under **Settings → Devices → Enphase Envoy**. Sigener
 
 ## Docker Compose
 
-Requires `config/site.env` (run `setup-local.sh` first). `emhass-cron` and `energy-monitor` load sensor overrides from `site.env` via `env_file`.
+Requires `config/site.env` (run `setup-local.sh` first). `emhass`, `emhass-cron`,
+and `energy-monitor` load site variables from `config/site.env` via `env_file`.
 
 ```bash
 docker compose up -d
 ```
+
+## Sigenergy native fallback
+
+`input_boolean.emhass_auto_control_master` controls whether EMHASS may use
+Sigenergy command modes. Turning it off does not require an operator to select an
+inverter mode manually: `script.sigen_restore_native_control` selects
+`Maximum Self-consumption (Default)` automatically.
+
+Restoration is successful only when Home Assistant confirms all of the following:
+
+1. The Remote EMS control mode is `Maximum Self-consumption (Default)`.
+2. The charging and discharging limit entities are available.
+3. Each restored limit equals the smaller of its operator cap and the device's
+   MQTT-advertised `max` attribute, within 0.02 kW.
+4. `input_datetime.emhass_last_limit_write` advances after those confirmations.
+
+If mode or limit confirmation times out, keep the master off and investigate the
+`EMHASS D2` notification. Home Assistant start or a Sigenergy mode-entity reconnect
+while the master is off reruns the same restoration transaction, including when
+the inverter reports native mode immediately.
 
 ## Security notes
 

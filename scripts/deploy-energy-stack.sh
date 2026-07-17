@@ -4,6 +4,15 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=lib/source-site-env.sh
 source "${ROOT}/scripts/lib/source-site-env.sh"
+
+PYTHON="${ROOT}/.venv/bin/python"
+if [[ ! -x "${PYTHON}" ]]; then
+  PYTHON=python3
+fi
+
+echo "Validating EMHASS site location..."
+"${PYTHON}" "${ROOT}/scripts/lib/validate_site_location.py"
+
 REMOTE_HOST="${ENERGY_REMOTE_HOST}"
 REMOTE_DIR="${ENERGY_REMOTE_DIR}"
 
@@ -28,6 +37,6 @@ rsync -avz \
 ssh "${REMOTE_HOST}" "rm -f ${REMOTE_DIR}/crontab ${REMOTE_DIR}/Dockerfile ${REMOTE_DIR}/fetch_prices_emhass.py ${REMOTE_DIR}/README.md 2>/dev/null || true"
 
 echo "Building and restarting emhass, emhass-cron, energy-monitor..."
-ssh "${REMOTE_HOST}" "cd ${REMOTE_DIR} && docker compose build emhass-cron energy-monitor && docker compose up -d emhass emhass-cron energy-monitor"
+ssh "${REMOTE_HOST}" "cd ${REMOTE_DIR} && docker compose build emhass-cron energy-monitor && docker compose up -d --force-recreate emhass && docker compose up -d emhass-cron energy-monitor"
 
 echo "Done. Verify: docker compose exec emhass-cron python3 /app/fetch_prices_emhass.py --action mpc -v"

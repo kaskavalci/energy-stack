@@ -33,6 +33,8 @@ services:
     image: ghcr.io/davidusb-geek/emhass:latest
     container_name: emhass
     restart: unless-stopped
+    env_file:
+      - config/site.env
     ports:
       - "5000:5000"
     volumes:
@@ -42,7 +44,6 @@ services:
       - ./emhass/secrets_emhass.yaml:/app/secrets_emhass.yaml:ro
     environment:
       - LOCAL_COSTFUN=profit
-      - TZ=Europe/Amsterdam
     healthcheck:
       test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/', timeout=5)\""]
       interval: 30s
@@ -67,7 +68,6 @@ services:
       - EMAHASS_SECRETS=/secrets/secrets_emhass.yaml
       - EMAHASS_SHARE=/share
       - EMHASS_CONTAINER=emhass
-      - TZ=Europe/Amsterdam
     depends_on:
       emhass:
         condition: service_healthy
@@ -92,7 +92,6 @@ services:
       - HA_NOTIFY_SERVICE=notify.notify
       - ALERT_COOLDOWN_SEC=7200
       - ALERT_FAILURE_THRESHOLD=2
-      - TZ=Europe/Amsterdam
     depends_on:
       emhass:
         condition: service_healthy

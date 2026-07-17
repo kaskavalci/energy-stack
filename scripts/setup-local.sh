@@ -23,7 +23,6 @@ render_sigenergy() {
   local content
   content="$(<"$src")"
   content="${content//__SIGENERGY_MODBUS_HOST__/${SIGENERGY_MODBUS_HOST}}"
-  content="${content//__SIGENERGY_MODBUS_SLAVE__/${SIGENERGY_MODBUS_SLAVE}}"
   printf '%s' "$content" > "$dest"
 }
 render_sigenergy

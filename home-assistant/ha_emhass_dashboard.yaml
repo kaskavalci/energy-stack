@@ -133,8 +133,14 @@ template:
       - name: EMHASS plan valid
         unique_id: emhass_plan_valid
         default_entity_id: binary_sensor.emhass_plan_valid
-        device_class: problem
+        icon: mdi:check-circle
         state: "{{ is_state('sensor.optim_status', 'Optimal') }}"
+
+      - name: EMHASS plan problem
+        unique_id: emhass_plan_problem
+        default_entity_id: binary_sensor.emhass_plan_problem
+        device_class: problem
+        state: "{{ not is_state('sensor.optim_status', 'Optimal') }}"
 
       - name: EMHASS control allowed
         unique_id: emhass_control_allowed

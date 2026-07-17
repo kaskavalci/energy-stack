@@ -1,11 +1,17 @@
 # Copy to sigenergy/sigenergy2mqtt.yaml (gitignored). Rendered by setup-local.sh from site.env.
 # See https://github.com/seud0nym/sigenergy2mqtt
+# sigenergy2mqtt 2026.4+ requires modbus as a list and mqtt.broker (not mqtt.host).
+
+home-assistant:
+  enabled: true
 
 modbus:
-  host: __SIGENERGY_MODBUS_HOST__
-  port: 502
-  slave: __SIGENERGY_MODBUS_SLAVE__
+  - host: __SIGENERGY_MODBUS_HOST__
+    port: 502
+    # Inverter Modbus device ID from the installer (usually 1). Not the old plant slave 247.
+    inverters: [1]
 
 mqtt:
-  host: mosquitto
+  broker: mosquitto
   port: 1883
+  anonymous: true
