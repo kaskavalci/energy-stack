@@ -96,12 +96,47 @@ views:
           - entity: sensor.p_batt_forecast
           - entity: sensor.__SIGEN_PLANT_SLUG___plant_battery_power
 
-      - type: history-graph
-        title: PV forecast vs Envoy (24 h)
-        hours_to_show: 24
-        entities:
-          - entity: sensor.p_pv_forecast
-          - entity: sensor.emhass_pv_power_w
+      # PV actual and forecast
+      - type: vertical-stack
+        cards:
+          - type: statistics-graph
+            title: Actual PV — yesterday and today
+            days_to_show: 2
+            period: hour
+            chart_type: line
+            stat_types:
+              - mean
+            entities:
+              - entity: sensor.emhass_pv_power_w
+                name: Actual PV (hourly mean)
+
+          - type: markdown
+            title: Today's PV forecast
+            entity_id:
+              - sensor.p_pv_forecast
+            content: >
+              {%- set rows = state_attr('sensor.p_pv_forecast', 'forecasts') or [] -%}
+              {%- set today = now().strftime('%Y-%m-%d') -%}
+              {%- set ns = namespace(count=0) -%}
+              {%- for row in rows -%}
+              {%- if (row.date | string)[:10] == today -%}
+              {%- set ns.count = ns.count + 1 -%}
+              {%- endif -%}
+              {%- endfor -%}
+              {%- if ns.count == 0 -%}
+              <p><em>No PV forecast rows for today.</em></p>
+              {%- else -%}
+              <table width="100%">
+              <thead><tr><th>Time</th><th align="right">Forecast</th></tr></thead>
+              <tbody>
+              {%- for row in rows -%}
+              {%- if (row.date | string)[:10] == today -%}
+              <tr><td>{{ (row.date | string)[11:16] }}</td><td align="right">{{ row.p_pv_forecast | float(0) | round(0) }} W</td></tr>
+              {%- endif -%}
+              {%- endfor -%}
+              </tbody>
+              </table>
+              {%- endif -%}
 
       - type: history-graph
         title: Import price (published steps)

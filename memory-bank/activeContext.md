@@ -1,7 +1,23 @@
 # Active Context
 
-**Last updated:** 2026-07-16
+**Last updated:** 2026-07-17
 **Author:** Cursor Grok 4.5
+
+## EMHASS native PV panel deployment verified (2026-07-17)
+
+- EMHASS cached parameters and the fresh Open-Meteo cache match the configured
+  Dutch site and time zone; no Alpine image defaults remain in use.
+- Home Assistant passed configuration checks before and after its single checked
+  restart. The live panel contains the native hourly statistics graph and
+  today-only PV forecast table, with no custom chart or ApexCharts resource.
+- One normal post-restart MPC exited `0`; prices, weather cache, naive MPC, and
+  publish stages completed. The current run artifact reports `mpc.ok=true`, HA
+  reports `optim_status=Optimal`, and all 26 published forecast rows are current.
+- EMHASS is running and healthy; `emhass-cron` and `energy-monitor` are running.
+  The EMHASS master was `on` before and after the MPC and was never toggled.
+- Preserve the verified Task 7 Home Assistant backup at
+  `/mnt/data/supervisor/homeassistant/backups/energy-stack-20260717-102948/`;
+  it contains `configuration.yaml`.
 
 ## Sigenergy native fallback verified (2026-07-16)
 

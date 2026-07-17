@@ -25,6 +25,12 @@
 - Price fetch failure → **abort MPC**
 - Weather retry → `clear_weather_cache_files()` before `weather-forecast-cache`
 - Shared stale logic: `lib/weather_cache_stale.py`
+- EMHASS site location comes from validated `LAT`, `LON`, `ALT`, and
+  `TIME_ZONE` in gitignored `config/site.env`; never rely on image defaults.
+- `TZ` and `TIME_ZONE` must match.
+- The trading dashboard uses native hourly statistics plus a today-only PV
+  forecast table; do not add custom chart resources to the memory-constrained
+  HA host.
 - Master-off or control-failure fallback selects Sigenergy native
   `Maximum Self-consumption (Default)` automatically; operators do not select it
   during healthy MPC trading.
