@@ -130,27 +130,67 @@ template:
           {{ [min_soc + 5, 100] | min }}
 
   - binary_sensor:
+      - name: EMHASS MPC fresh
+        unique_id: emhass_mpc_fresh
+        default_entity_id: binary_sensor.emhass_mpc_fresh
+        device_class: running
+        state: >
+          {% set bad = ['unknown', 'unavailable', 'none', ''] %}
+          {% set completed = states('input_datetime.emhass_last_successful_mpc') %}
+          {% set completed_ts = as_timestamp(completed, 0) %}
+          {% set age_s = as_timestamp(now()) - completed_ts %}
+          {% set pb = states('sensor.p_batt_forecast') %}
+          {{ completed_ts > 0
+             and age_s >= -5 * 60
+             and age_s < 40 * 60
+             and pb not in bad
+             and (pb | float(none)) is not none
+             and is_state('sensor.optim_status', 'Optimal') }}
+        attributes:
+          reason: >
+            {% set bad = ['unknown', 'unavailable', 'none', ''] %}
+            {% set completed = states('input_datetime.emhass_last_successful_mpc') %}
+            {% set completed_ts = as_timestamp(completed, 0) %}
+            {% set age_s = as_timestamp(now()) - completed_ts %}
+            {% set pb = states('sensor.p_batt_forecast') %}
+            {% if pb in bad or (pb | float(none)) is none %}
+              plan_missing
+            {% elif completed_ts <= 0 or age_s < -5 * 60 or age_s >= 40 * 60 %}
+              plan_stale
+            {% elif not is_state('sensor.optim_status', 'Optimal') %}
+              optim_not_optimal
+            {% else %}
+              ok
+            {% endif %}
+          age_min: >
+            {% set completed_ts = as_timestamp(states('input_datetime.emhass_last_successful_mpc'), 0) %}
+            {{ ((as_timestamp(now()) - completed_ts) / 60) | round(1)
+               if completed_ts > 0 else none }}
+          last_successful_mpc: "{{ states('input_datetime.emhass_last_successful_mpc') }}"
+
       - name: EMHASS plan valid
         unique_id: emhass_plan_valid
         default_entity_id: binary_sensor.emhass_plan_valid
         icon: mdi:check-circle
-        state: "{{ is_state('sensor.optim_status', 'Optimal') }}"
+        state: "{{ is_state('binary_sensor.emhass_mpc_fresh', 'on') }}"
 
       - name: EMHASS plan problem
         unique_id: emhass_plan_problem
         default_entity_id: binary_sensor.emhass_plan_problem
         device_class: problem
-        state: "{{ not is_state('sensor.optim_status', 'Optimal') }}"
+        state: "{{ not is_state('binary_sensor.emhass_mpc_fresh', 'on') }}"
 
       - name: EMHASS control allowed
         unique_id: emhass_control_allowed
         default_entity_id: binary_sensor.emhass_control_allowed
         device_class: running
         state: >
-          {% set pb = states('sensor.p_batt_forecast') %}
           {% set soc = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(none) %}
           {% set min_soc = states('input_number.emhass_soc_min') | float(5) %}
           {% set pf = states('sensor.emhass_prices_fetched_at') %}
+          {% set fresh = is_state('binary_sensor.emhass_mpc_fresh', 'on') %}
+          {% set fresh_reason = state_attr('binary_sensor.emhass_mpc_fresh', 'reason')
+             | default('plan_stale', true) %}
           {% set ns = namespace(reason='ok') %}
           {% if not is_state('input_boolean.emhass_auto_control_master', 'on') %}
             {% set ns.reason = 'master_off' %}
@@ -158,56 +198,54 @@ template:
             {% set ns.reason = 'soc_invalid' %}
           {% elif pf not in ['unknown', 'unavailable', 'none', ''] and (now() - states.sensor.emhass_prices_fetched_at.last_changed).total_seconds() > 26 * 3600 %}
             {% set ns.reason = 'prices_stale' %}
-          {% elif pb in ['unknown', 'unavailable', 'none', ''] or (pb | float(none)) is none %}
-            {% set ns.reason = 'plan_missing' %}
-          {% elif (now() - states.sensor.p_batt_forecast.last_updated).total_seconds() > 35 * 60 %}
-            {% set ns.reason = 'plan_stale' %}
-          {% elif not is_state('sensor.optim_status', 'Optimal') %}
-            {% set ns.reason = 'optim_not_optimal' %}
+          {% elif not fresh %}
+            {% set ns.reason = fresh_reason %}
           {% elif soc < min_soc %}
             {% set ns.reason = 'soc_below_floor' %}
           {% endif %}
           {{ ns.reason == 'ok' }}
         attributes:
           block_reason: >
-            {% set pb = states('sensor.p_batt_forecast') %}
             {% set soc = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(none) %}
             {% set min_soc = states('input_number.emhass_soc_min') | float(5) %}
             {% set pf = states('sensor.emhass_prices_fetched_at') %}
+            {% set fresh = is_state('binary_sensor.emhass_mpc_fresh', 'on') %}
+            {% set fresh_reason = state_attr('binary_sensor.emhass_mpc_fresh', 'reason')
+               | default('plan_stale', true) %}
             {% if not is_state('input_boolean.emhass_auto_control_master', 'on') %}
               master_off
             {% elif soc is none or soc > 100 %}
               soc_invalid
             {% elif pf not in ['unknown', 'unavailable', 'none', ''] and (now() - states.sensor.emhass_prices_fetched_at.last_changed).total_seconds() > 26 * 3600 %}
               prices_stale
-            {% elif pb in ['unknown', 'unavailable', 'none', ''] or (pb | float(none)) is none %}
-              plan_missing
-            {% elif (now() - states.sensor.p_batt_forecast.last_updated).total_seconds() > 35 * 60 %}
-              plan_stale
-            {% elif not is_state('sensor.optim_status', 'Optimal') %}
-              optim_not_optimal
+            {% elif not fresh %}
+              {{ fresh_reason }}
             {% elif soc < min_soc %}
               soc_below_floor
             {% else %}
               ok
             {% endif %}
           block_action: >
-            {% set pb = states('sensor.p_batt_forecast') %}
             {% set soc = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(none) %}
             {% set min_soc = states('input_number.emhass_soc_min') | float(5) %}
             {% set pf = states('sensor.emhass_prices_fetched_at') %}
+            {% set fresh = is_state('binary_sensor.emhass_mpc_fresh', 'on') %}
+            {% set fresh_reason = state_attr('binary_sensor.emhass_mpc_fresh', 'reason')
+               | default('plan_stale', true) %}
             {% if not is_state('input_boolean.emhass_auto_control_master', 'on') %}
               Turn on master switch to resume control.
             {% elif soc is none or soc > 100 %}
               Check sigenergy2mqtt battery sensors.
             {% elif pf not in ['unknown', 'unavailable', 'none', ''] and (now() - states.sensor.emhass_prices_fetched_at.last_changed).total_seconds() > 26 * 3600 %}
               Check Zonneplan integration and emhass-cron on energy host.
-            {% elif pb in ['unknown', 'unavailable', 'none', ''] or (pb | float(none)) is none %}
-              Wait for next MPC run or check energy host.
-            {% elif (now() - states.sensor.p_batt_forecast.last_updated).total_seconds() > 35 * 60 %}
-              Check emhass-cron and EMHASS logs on energy host.
-            {% elif not is_state('sensor.optim_status', 'Optimal') %}
-              Check EMHASS logs for solver infeasibility.
+            {% elif not fresh %}
+              {% if fresh_reason == 'plan_missing' %}
+                Wait for next MPC run or check energy host.
+              {% elif fresh_reason == 'optim_not_optimal' %}
+                Check EMHASS logs for solver infeasibility.
+              {% else %}
+                Check emhass-cron; last successful MPC is older than 40 minutes.
+              {% endif %}
             {% elif soc < min_soc %}
               Wait for recovery charge plan.
             {% else %}
@@ -216,11 +254,6 @@ template:
           master_on: "{{ is_state('input_boolean.emhass_auto_control_master', 'on') }}"
           optim_status: "{{ states('sensor.optim_status') }}"
           p_batt_forecast: "{{ states('sensor.p_batt_forecast') }}"
-          p_batt_age_min: >
-            {% set pb = states.sensor.p_batt_forecast %}
-            {% if pb is not none and pb.state not in ['unknown', 'unavailable', 'none', ''] %}
-              {{ ((now() - pb.last_updated).total_seconds() / 60) | round(1) }}
-            {% else %}
-              0.0
-            {% endif %}
+          last_successful_mpc: "{{ states('input_datetime.emhass_last_successful_mpc') }}"
+          mpc_age_min: "{{ state_attr('binary_sensor.emhass_mpc_fresh', 'age_min') }}"
           battery_soc: "{{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') }}"

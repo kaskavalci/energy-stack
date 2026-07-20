@@ -8,6 +8,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_PATH = REPO_ROOT / "home-assistant" / "ha_sigen_ems.yaml"
+DASHBOARD_PACKAGE_PATH = REPO_ROOT / "home-assistant" / "ha_emhass_dashboard.yaml"
+MONITORING_PACKAGE_PATH = REPO_ROOT / "home-assistant" / "ha_emhass_monitoring.yaml"
 
 
 def package_text() -> str:
@@ -98,7 +100,7 @@ class SigenNativeRestoreTests(unittest.TestCase):
 
     def test_disable_wrapper_is_restartable(self) -> None:
         disable = script_block(
-            "sigen_disable_remote_ems", "sigen_apply_emhass_plan"
+            "sigen_disable_remote_ems", "sigen_clear_recovery"
         )
         self.assertIn("mode: restart", disable)
         self.assertIn("service: script.sigen_restore_native_control", disable)
@@ -141,9 +143,249 @@ class EmhassPlanValidityPresentationTests(unittest.TestCase):
         )[1].split("      - name: EMHASS control allowed\n", 1)[0]
         self.assertIn("device_class: problem", problem)
         self.assertIn(
-            'state: "{{ not is_state(\'sensor.optim_status\', \'Optimal\') }}"',
+            'state: "{{ not is_state(\'binary_sensor.emhass_mpc_fresh\', \'on\') }}"',
             problem,
         )
+
+
+class EmhassMpcFreshnessContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.dashboard = DASHBOARD_PACKAGE_PATH.read_text(encoding="utf-8")
+        self.monitoring = MONITORING_PACKAGE_PATH.read_text(encoding="utf-8")
+
+    def test_source_controlled_freshness_uses_success_marker(self) -> None:
+        fresh = self.dashboard.split(
+            "      - name: EMHASS MPC fresh\n", 1
+        )[1].split("      - name: EMHASS plan valid\n", 1)[0]
+        self.assertIn("input_datetime.emhass_last_successful_mpc", fresh)
+        self.assertIn("age_s >= -5 * 60", fresh)
+        self.assertIn("age_s < 40 * 60", fresh)
+        self.assertIn("sensor.p_batt_forecast", fresh)
+        self.assertIn("sensor.optim_status", fresh)
+        self.assertIn("reason:", fresh)
+
+    def test_control_gate_consumes_central_freshness_reason(self) -> None:
+        control = self.dashboard.split(
+            "      - name: EMHASS control allowed\n", 1
+        )[1]
+        self.assertIn("binary_sensor.emhass_mpc_fresh", control)
+        self.assertIn("fresh_reason", control)
+        self.assertNotIn("states.sensor.p_batt_forecast.last_updated", control)
+
+    def test_validity_and_stale_monitor_use_central_sensor(self) -> None:
+        self.assertIn(
+            'state: "{{ is_state(\'binary_sensor.emhass_mpc_fresh\', \'on\') }}"',
+            self.dashboard,
+        )
+        stale = self.monitoring.split(
+            "      - name: EMHASS fail plan stale\n", 1
+        )[1].split("      - name: EMHASS fail PV sensor\n", 1)[0]
+        self.assertIn("binary_sensor.emhass_mpc_fresh", stale)
+        self.assertIn("plan_stale", stale)
+        self.assertNotIn("p_batt_forecast.last_updated", stale)
+
+
+class EmhassRecoveryStateMachineTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.package = package_text()
+
+    def test_normal_apply_uses_plan_completion_control_enable_and_safe_retry(self) -> None:
+        normal_apply = automation_block(
+            "emhass_sigen_apply_plan_scheduled",
+            "emhass_sigen_disable_on_stale_plan",
+        )
+        self.assertIn(
+            """- id: plan_completed
+        platform: state
+        entity_id: input_datetime.emhass_last_successful_mpc""",
+            normal_apply,
+        )
+        self.assertIn(
+            """- id: control_enabled
+        platform: state
+        entity_id: binary_sensor.emhass_control_allowed
+        to: "on\"""",
+            normal_apply,
+        )
+        self.assertIn(
+            """- id: retry
+        platform: time_pattern
+        minutes: "/5\"""",
+            normal_apply,
+        )
+        self.assertIn(
+            """{{ trigger.id != 'retry'
+             or now().minute not in [0, 30] }}""",
+            normal_apply,
+        )
+        self.assertIn(
+            "{{ (as_timestamp(now()) - as_timestamp(last)) >= 300 }}",
+            normal_apply,
+        )
+        self.assertNotIn('minutes: "/30"', normal_apply)
+        self.assertIn("binary_sensor.emhass_control_allowed", normal_apply)
+        self.assertIn("input_boolean.emhass_recovery_active", normal_apply)
+
+    def test_recovery_helpers_are_restart_restored(self) -> None:
+        boolean = self.package.split("input_boolean:\n", 1)[1].split(
+            "input_number:\n", 1
+        )[0]
+        self.assertIn("emhass_recovery_active:", boolean)
+        self.assertNotIn("initial:", boolean.split("emhass_recovery_active:", 1)[1])
+        number = self.package.split("  emhass_recovery_charge_w:\n", 1)[1].split(
+            "  emhass_soc_target:\n", 1
+        )[0]
+        self.assertNotIn("initial:", number)
+
+    def test_recovery_start_requires_floor_freshness_and_charge(self) -> None:
+        start = automation_block(
+            "emhass_recovery_start", "emhass_recovery_reconcile"
+        )
+        self.assertIn("binary_sensor.emhass_mpc_fresh", start)
+        self.assertIn("below: input_number.emhass_soc_min", start)
+        self.assertIn("p < (0 - threshold)", start)
+        self.assertIn("service: script.sigen_start_recovery", start)
+        self.assertNotIn("sensor.emhass_mpc_status", start)
+
+    def test_recovery_start_requires_soc_in_valid_range(self) -> None:
+        start = automation_block(
+            "emhass_recovery_start", "emhass_recovery_reconcile"
+        )
+        conditions = start.split("    condition:\n", 1)[1].split(
+            "    action:\n", 1
+        )[0]
+        valid_soc = """{% set soc = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(none) %}
+          {{ soc is not none and 0 <= soc <= 100 }}"""
+        self.assertIn(valid_soc, conditions)
+        self.assertLess(
+            conditions.index(valid_soc),
+            conditions.index("below: input_number.emhass_soc_min"),
+        )
+        self.assertLess(
+            start.index(valid_soc),
+            start.index("service: script.sigen_start_recovery"),
+        )
+
+    def test_active_recovery_owns_actuator_until_target(self) -> None:
+        reconcile = self.package.split(
+            "  - id: emhass_recovery_reconcile\n", 1
+        )[1]
+        self.assertIn('minutes: "/5"', reconcile)
+        self.assertIn("platform: homeassistant", reconcile)
+        self.assertIn("id: reconnect", reconcile)
+        self.assertIn("soc >= target", reconcile)
+        self.assertIn("service: script.sigen_apply_active_recovery", reconcile)
+        self.assertIn("service: script.sigen_clear_recovery", reconcile)
+        self.assertIn("service: script.sigen_apply_emhass_plan", reconcile)
+        self.assertIn("service: script.sigen_restore_native_control", reconcile)
+
+    def test_recovery_target_trigger_is_inclusive_and_soc_valid(self) -> None:
+        reconcile = self.package.split(
+            "  - id: emhass_recovery_reconcile\n", 1
+        )[1]
+        triggers = reconcile.split("    trigger:\n", 1)[1].split(
+            "    condition:\n", 1
+        )[0]
+        target_reached = triggers.split("      - id: target_reached\n", 1)[1].split(
+            "      - id: target_changed\n", 1
+        )[0]
+        self.assertIn("platform: template", target_reached)
+        self.assertIn(
+            "states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(none)",
+            target_reached,
+        )
+        self.assertIn(
+            "states('sensor.emhass_recovery_target_soc') | float(none)",
+            target_reached,
+        )
+        self.assertIn("soc is not none", target_reached)
+        self.assertIn("target is not none", target_reached)
+        self.assertIn("0 <= soc <= 100", target_reached)
+        self.assertIn("soc >= target", target_reached)
+        self.assertNotIn(
+            "above: sensor.emhass_recovery_target_soc",
+            triggers,
+        )
+
+    def test_active_recovery_always_applies_clamped_charge_limit(self) -> None:
+        active = script_block(
+            "sigen_apply_active_recovery", "sigen_apply_emhass_plan"
+        )
+        self.assertIn("service: script.sigen_apply_charge_limits", active)
+        self.assertIn('watts: "{{ charge_limit_w }}"', active)
+        self.assertNotIn("emhass_power_threshold_w", active)
+
+    def test_reconcile_clears_only_for_master_invalid_soc_or_target(self) -> None:
+        reconcile = self.package.split(
+            "  - id: emhass_recovery_reconcile\n", 1
+        )[1]
+        self.assertNotIn("stored_w < threshold", reconcile)
+        self.assertNotIn(
+            "SOC recovery cancelled because its stored setpoint was invalid.",
+            reconcile,
+        )
+        self.assertIn("emhass_auto_control_master", reconcile)
+        self.assertIn("trigger.id == 'invalid_soc'", reconcile)
+        self.assertIn(
+            "soc is not none and 0 <= soc <= 100 and soc >= target",
+            reconcile,
+        )
+        self.assertEqual(
+            reconcile.count("service: script.sigen_clear_recovery"),
+            3,
+        )
+
+    def test_recovery_completion_requires_soc_in_valid_range(self) -> None:
+        reconcile = self.package.split(
+            "  - id: emhass_recovery_reconcile\n", 1
+        )[1]
+        action = reconcile.split("    action:\n", 1)[1]
+        after_invalid = action.split(
+            'message: "SOC recovery cancelled because SOC was invalid for two minutes."\n',
+            1,
+        )[1]
+        completion_conditions = after_invalid.split(
+            "            sequence:\n", 1
+        )[0]
+        self.assertIn(
+            'value_template: "{{ soc is not none and 0 <= soc <= 100 and soc >= target }}"',
+            completion_conditions,
+        )
+
+    def test_ordinary_apply_and_failure_fallback_skip_active_recovery(self) -> None:
+        scheduled = automation_block(
+            "emhass_sigen_apply_plan_scheduled",
+            "emhass_sigen_disable_on_stale_plan",
+        )
+        stale = automation_block(
+            "emhass_sigen_disable_on_stale_plan",
+            "emhass_sigen_disable_on_bad_optim",
+        )
+        bad_optim = automation_block(
+            "emhass_sigen_disable_on_bad_optim",
+            "emhass_soc_floor_cutout",
+        )
+        for block in (scheduled, stale, bad_optim):
+            self.assertIn("input_boolean.emhass_recovery_active", block)
+            self.assertIn('state: "off"', block)
+
+    def test_master_off_clears_recovery_before_native_restore(self) -> None:
+        kill = automation_block(
+            "emhass_sigen_kill_switch_off",
+            "emhass_sigen_enforce_master_off",
+        )
+        clear_pos = kill.index("service: script.sigen_clear_recovery")
+        native_pos = kill.index("service: script.sigen_disable_remote_ems")
+        self.assertLess(clear_pos, native_pos)
+
+    def test_recovery_stalled_monitor_observes_explicit_state(self) -> None:
+        monitoring = MONITORING_PACKAGE_PATH.read_text(encoding="utf-8")
+        stalled = monitoring.split(
+            "  - id: emhass_notify_D3_recovery_stalled\n", 1
+        )[1]
+        self.assertIn("input_boolean.emhass_recovery_active", stalled)
+        self.assertIn("id: active_recovery", stalled)
+        self.assertIn("id: waiting_below_floor", stalled)
 
 
 if __name__ == "__main__":

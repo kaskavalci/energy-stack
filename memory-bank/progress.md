@@ -1,7 +1,7 @@
 # Progress
 
-*Last updated: 2026-07-11 (afternoon CEST)*  
-*Author: Auto*
+*Last updated: 2026-07-20 (CEST)*
+*Author: Composer*
 
 ## Completed
 
@@ -14,11 +14,13 @@
 - [x] MPC recovery after load-sensor history 500 + publish URL slash fix (2026-07-11 morning; regressed same afternoon ~07:30 CEST)
 - [x] MPC recovery after PV history 500 — host placeholder `sensor.p_pv_forecast` (2026-07-11 ~13:28 CEST; `mpc.ok: true`)
 - [x] P0 repo: `config.json.example` placeholders, alpha/beta doc reconciliation, `fetch_current_load` unit tests (2026-07-11)
+- [x] Durable MPC success marker + latched SOC recovery freshness (2026-07-20): `input_datetime.emhass_last_successful_mpc`, `binary_sensor.emhass_mpc_fresh`, restart-safe `emhass_recovery_active` state machine; live-verified with master off
+- [x] **`emhass_recovery_complete` guard** — replaced by start/reconcile ownership; recovery no longer consumes unmaintained `sensor.emhass_mpc_status`
+- [x] Freshness gating before EMS apply (`emhass_control_allowed`) — consumes central `binary_sensor.emhass_mpc_fresh`
 
 ## Known issues
 
 - SOC execution headroom not implemented (`memory-bank/notebook/emhass-soc-min-trading.md`)
-- `emhass_control_allowed` freshness gating not implemented
 - Package keys still prefixed `reterminal_emhass_*` on live HA (rename deferred)
 - HA recorder corrupted hours break full-day history: Jul 10 **14 UTC** (P1), Jul 11 **07 UTC** (PV/envoy/P1). Zonneplan tariff and `sensor.p_pv_forecast` unaffected.
 - Jul 12 P1 revert assumption was wrong — Jul 11 full-day P1 history still HTTP 500 (bad hour 07 UTC). Date rollover alone does not unblock P1 revert.
@@ -46,10 +48,10 @@
 
 ### Before / at deploy — P1
 
-- [ ] **`emhass_recovery_complete` guard** — ensure recovery path does not apply stale MPC output after sensor/config changes
+- [x] **`emhass_recovery_complete` guard** — done via recovery start/reconcile + fresh-MPC latch (2026-07-20)
 - [ ] **SOC floor migration notes** — document 10% → 5% floor change for operators and HA templates
 - [ ] **`block_reason` vs policy alignment** — `memory-bank/notebook/emhass-actionable-alerts-policy.md` must match live alert templates and monitor logic
-- [ ] Run `./scripts/render-ha-packages.sh` + `test_ha_config_merge` (or equivalent merge test) before `deploy-home-assistant.sh`
+- [x] Run `./scripts/render-ha-packages.sh` + package structural tests before `deploy-home-assistant.sh` (2026-07-20)
 
 ### After HA recorder repair — revert placeholders
 
@@ -69,7 +71,7 @@ Only after full-day history HTTP 200 for affected sensors on Jul 11 (and P1 on J
 - [ ] Stale battery SOC (`sensor.sigen_0_plant_battery_soc`) — sigenergy2mqtt investigation
 - [ ] Security minors from `.bug-hunter` scan
 - [ ] SOC apply-time clamp (`memory-bank/notebook/emhass-soc-min-trading.md`)
-- [ ] Freshness gating before EMS apply (`emhass_control_allowed`)
+- [x] Freshness gating before EMS apply (`emhass_control_allowed`) — 2026-07-20
 - [ ] Remove alpha/beta from MPC payload per 2026-07-05 safe-blending design
 - [ ] Optional coordinated release tags with reterminal repo
 

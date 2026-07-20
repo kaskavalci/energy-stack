@@ -16,6 +16,7 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta
+from http.client import HTTPException
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
@@ -86,6 +87,9 @@ WEATHER_FAILURE_KEYWORDS = (
     "pv",
 )
 WEATHER_CACHE_RETRY_BACKOFF_S = (15.0, 45.0)
+MPC_SUCCESS_ENTITY_ID = "input_datetime.emhass_last_successful_mpc"
+MPC_STATUS_MAX_ATTEMPTS = 3
+MPC_STATUS_RETRY_DELAY_S = 2.0
 
 
 def _parse_simple_yaml_value(text: str, key: str) -> str | None:
@@ -142,6 +146,65 @@ def fetch_ha_state(
     req = Request(url, headers={"Authorization": f"Bearer {token}"})
     with urlopen(req, timeout=timeout) as response:
         return json.loads(response.read().decode("utf-8"))
+
+
+def publish_ha_input_datetime(
+    secrets_path: Path,
+    entity_id: str,
+    completed_at: datetime,
+    *,
+    timeout: float = 15,
+    max_attempts: int = MPC_STATUS_MAX_ATTEMPTS,
+    retry_delay_s: float = MPC_STATUS_RETRY_DELAY_S,
+) -> None:
+    """Set a restart-restored HA input_datetime using one idempotent timestamp."""
+    if completed_at.tzinfo is None or completed_at.utcoffset() is None:
+        raise ValueError("completed_at must be timezone-aware")
+    if not secrets_path.is_file():
+        raise RuntimeError(f"Secrets file not found: {secrets_path}")
+    text = secrets_path.read_text(encoding="utf-8")
+    hass_url = _parse_simple_yaml_value(text, "hass_url")
+    token = _parse_simple_yaml_value(text, "long_lived_token")
+    if not hass_url or not token:
+        raise RuntimeError("hass_url or long_lived_token missing in secrets")
+    if not hass_url.endswith("/"):
+        hass_url += "/"
+
+    url = f"{hass_url}api/services/input_datetime/set_datetime"
+    body = json.dumps(
+        {"entity_id": entity_id, "timestamp": completed_at.timestamp()}
+    ).encode("utf-8")
+    last_exc: OSError | HTTPException | None = None
+    for attempt in range(1, max_attempts + 1):
+        request = Request(
+            url,
+            data=body,
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=timeout) as response:
+                response.read()
+            return
+        except (HTTPError, URLError, TimeoutError, OSError, HTTPException) as exc:
+            last_exc = exc
+            if attempt >= max_attempts:
+                break
+            logging.warning(
+                "HA successful-MPC marker attempt %d/%d failed (%s); retry in %.0fs",
+                attempt,
+                max_attempts,
+                exc,
+                retry_delay_s,
+            )
+            time.sleep(retry_delay_s)
+
+    raise RuntimeError(
+        f"Could not update {entity_id} after {max_attempts} attempts: {last_exc}"
+    ) from last_exc
 
 
 def _hourly_from_forecast(forecast: list[Any], tz: ZoneInfo) -> dict[datetime, float]:
@@ -719,6 +782,46 @@ def run_mpc_chain(
     call_emhass_action(base_url, "publish-data", {}, timeout=publish_timeout)
 
 
+def finalize_successful_mpc_run(
+    secrets_path: Path,
+    share_dir: Path,
+    completed_at: datetime,
+    *,
+    prediction_horizon: int,
+) -> bool:
+    try:
+        publish_ha_input_datetime(
+            secrets_path,
+            MPC_SUCCESS_ENTITY_ID,
+            completed_at,
+        )
+    except RuntimeError as exc:
+        error = f"HA successful-MPC marker failed: {exc}"
+        logging.error(error)
+        write_run_status(
+            share_dir,
+            "mpc",
+            ok=False,
+            error=error,
+            failure_kind="status_publish",
+        )
+        return False
+
+    write_run_status(
+        share_dir,
+        "mpc",
+        ok=True,
+        metadata={
+            "prediction_horizon": prediction_horizon,
+            "load_forecast_mode": LOAD_FORECAST_MODE,
+            "load_forecast_constant_w": LOAD_FORECAST_CONSTANT_W,
+            "plan_generated_at": completed_at.isoformat(),
+        },
+    )
+    write_run_status(share_dir, "weather", ok=True)
+    return True
+
+
 def _abort_mpc_prices(share_dir: Path, error: str) -> int:
     write_run_status(share_dir, "prices", ok=False, error=error)
     write_run_status(share_dir, "mpc", ok=False, error=f"price fetch failed: {error}")
@@ -1030,18 +1133,14 @@ def main() -> int:
             write_mpc_weather_failures(args.share_dir, str(exc))
             return 1
 
-        write_run_status(
+        completed_at = datetime.now(ZoneInfo(args.timezone))
+        finalized = finalize_successful_mpc_run(
+            args.secrets,
             args.share_dir,
-            "mpc",
-            ok=True,
-            metadata={
-                "prediction_horizon": prediction_horizon,
-                "load_forecast_mode": LOAD_FORECAST_MODE,
-                "load_forecast_constant_w": LOAD_FORECAST_CONSTANT_W,
-            },
+            completed_at,
+            prediction_horizon=prediction_horizon,
         )
-        write_run_status(args.share_dir, "weather", ok=True)
-        return 0
+        return 0 if finalized else 1
 
     logging.error("Unknown action %r", args.action)
     return 1

@@ -18,3 +18,10 @@ input_number:
     icon: mdi:battery-90
     mode: slider
     initial: 95
+
+input_datetime:
+  emhass_last_successful_mpc:
+    name: EMHASS last successful MPC
+    has_date: true
+    has_time: true
+    icon: mdi:clock-check-outline

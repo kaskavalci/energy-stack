@@ -42,12 +42,8 @@ template:
         default_entity_id: binary_sensor.emhass_fail_plan_stale
         device_class: problem
         state: >
-          {% set pb = states('sensor.p_batt_forecast') %}
-          {% if pb in ['unknown', 'unavailable', 'none', ''] %}
-            true
-          {% else %}
-            {{ (now() - states.sensor.p_batt_forecast.last_updated).total_seconds() > 35 * 60 }}
-          {% endif %}
+          {{ not is_state('binary_sensor.emhass_mpc_fresh', 'on')
+             and state_attr('binary_sensor.emhass_mpc_fresh', 'reason') == 'plan_stale' }}
 
       - name: EMHASS fail PV sensor
         unique_id: emhass_fail_pv_sensor
@@ -179,7 +175,8 @@ automation:
         data:
           title: "EMHASS A5: stale plan"
           message: >-
-            Action: Check emhass-cron on energy host. p_batt_forecast not updated >35 min. MPC/publish may have failed.
+            Action: Check emhass-cron on the energy host. Last successful MPC is
+            older than 40 minutes; five-minute publish-data does not refresh it.
 
   - id: emhass_notify_C1_pv
     alias: "EMHASS notify C1: PV sensor"
@@ -282,17 +279,18 @@ automation:
     alias: "EMHASS notify D3: recovery stalled"
     mode: single
     trigger:
-      - platform: numeric_state
+      - id: active_recovery
+        platform: state
+        entity_id: input_boolean.emhass_recovery_active
+        to: "on"
+        for:
+          hours: 2
+      - id: waiting_below_floor
+        platform: numeric_state
         entity_id: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
         below: input_number.emhass_soc_min
         for:
           hours: 6
-      - platform: template
-        value_template: >
-          {% set e = states.sensor.__SIGEN_PLANT_SLUG___plant_battery_soc %}
-          {{ e is none or e.state in ['unknown', 'unavailable', 'none', ''] or (now() - e.last_updated).total_seconds() > 2 * 3600 }}
-        for:
-          hours: 2
     condition:
       - condition: state
         entity_id: input_boolean.emhass_auto_control_master
@@ -302,4 +300,10 @@ automation:
         data:
           title: "EMHASS D3: recovery stalled"
           message: >-
-            Action: Check battery state. SOC has remained below floor or stale for >6h while master is on.
+            {% if trigger.id == 'active_recovery' %}
+              Action: Check Sigenergy mode, limits, and SOC. An authorized recovery
+              charge has been active for more than two hours without reaching target.
+            {% else %}
+              Action: Check MPC plans and prices. SOC has remained below floor for six
+              hours without a qualifying fresh EMHASS charge command.
+            {% endif %}
