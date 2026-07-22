@@ -1,7 +1,7 @@
 # AGENTS.md
 
 Instructions for AI coding agents working in the **energy-stack** repository.  
-**Last updated:** 2026-06-30
+**Last updated:** 2026-07-21
 
 ## Project overview
 
@@ -39,7 +39,10 @@ Configured in `config/site.env` (copy from `config/site.env.example`):
 | Key | Role |
 |-----|------|
 | `ENERGY_REMOTE_HOST` | Docker: EMHASS, emhass-cron, energy-monitor, MQTT bridges |
-| `HA_SSH_HOST` / `HA_SSH_PORT` | Home Assistant: integrations, EMS, dashboards |
+| `HA_SSH_HOST` / `HA_SSH_PORT` | Home Assistant Container host (SSH deploy) |
+| `HA_CONFIG_DIR` | HA config on host (default `/opt/homeassistant/config`) |
+| `HA_COMPOSE_DIR` / `HA_COMPOSE_FILE` | Compose path for restart |
+| `HA_CONTAINER_NAME` | HA container name (default `homeassistant`) |
 | `SIGENERGY_MODBUS_HOST` | Sigenergy inverter (Modbus) |
 
 ## Deploy and verify
@@ -49,12 +52,12 @@ Configured in `config/site.env` (copy from `config/site.env.example`):
 
 ./scripts/setup-local.sh              # first clone only
 ./scripts/deploy-energy-stack.sh      # energy host rsync + rebuild cron/monitor
-./scripts/deploy-home-assistant.sh    # render HA packages + deploy to HA
+./scripts/deploy-home-assistant.sh    # render HA packages + deploy to HA Container
 
 ssh "${ENERGY_REMOTE_HOST}" 'docker ps --filter name=emhass'
 ```
 
-HA deploy uses **additive merge** (`scripts/lib/ha_config_merge.py`) — only upserts energy-stack package keys. Renders `home-assistant/*.yaml` from `config/site.env` before upload.
+HA deploy uses **additive merge** (`scripts/lib/ha_config_merge.py`) — only upserts energy-stack package keys. Renders `home-assistant/*.yaml` from `config/site.env` before upload. Config check is `docker exec` (not `ha core check`); restart is `docker compose` (not `ha core restart`). Deploy user must own `${HA_CONFIG_DIR}` and be in the `docker` group (no interactive sudo).
 
 ## EMHASS invariants (do not break)
 
@@ -71,6 +74,7 @@ HA deploy uses **additive merge** (`scripts/lib/ha_config_merge.py`) — only up
 |-------|------|
 | Setup / site.env | `docs/SETUP.md` |
 | Entity contract (cross-repo) | `docs/ENTITY_CONTRACT.md` |
+| HA Odroid Container migration | `docs/ha-odroid-container-migration.md` |
 
 Operator scratch notes (gitignored): `memory-bank/notebook/`
 

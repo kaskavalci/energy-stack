@@ -1,11 +1,20 @@
 #!/usr/bin/env bash
 # Push EMHASS + Sigen Home Assistant packages (rendered from config/site.env).
+# Targets HA Container (Docker Compose), not HAOS Supervisor.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=lib/source-site-env.sh
 source "${ROOT}/scripts/lib/source-site-env.sh"
 
-HA="/mnt/data/supervisor/homeassistant"
+HA_CONFIG_DIR="${HA_CONFIG_DIR:-/opt/homeassistant/config}"
+HA_CONTAINER_NAME="${HA_CONTAINER_NAME:-homeassistant}"
+HA_COMPOSE_DIR="${HA_COMPOSE_DIR:-/opt/homeassistant}"
+if [[ -n "${HA_COMPOSE_FILE:-}" ]]; then
+  HA_COMPOSE_ARGS=(-f "${HA_COMPOSE_FILE}")
+else
+  HA_COMPOSE_ARGS=(-f "${HA_COMPOSE_DIR}/docker-compose.yml")
+fi
+
 STAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_PREFIX="${HA_DEPLOY_PREFIX:-energy-stack}"
 HA_SSH="${HA_SSH_USER}@${HA_SSH_HOST}"
@@ -26,18 +35,33 @@ if [[ ! -d "${RENDERED}" ]]; then
   exit 1
 fi
 
+remote() {
+  ssh -p "${HA_SSH_PORT}" "${HA_SSH}" "$@"
+}
+
+echo "Preflight: writable config dir and docker access on HA host..."
+remote "test -d '${HA_CONFIG_DIR}' && test -w '${HA_CONFIG_DIR}'" || {
+  echo "HA config dir missing or not writable: ${HA_CONFIG_DIR}" >&2
+  echo "Create it owned by the deploy user (no sudo at deploy time)." >&2
+  exit 1
+}
+remote "docker info >/dev/null" || {
+  echo "docker not usable without sudo on ${HA_SSH} (add user to docker group)." >&2
+  exit 1
+}
+
 echo "Preflight: emhass_publish_url in HA secrets.yaml..."
-if ! ssh -p "${HA_SSH_PORT}" "${HA_SSH}" "grep -q '^emhass_publish_url:' ${HA}/secrets.yaml 2>/dev/null"; then
-  echo "Missing emhass_publish_url in ${HA}/secrets.yaml on Home Assistant." >&2
+if ! remote "grep -q '^emhass_publish_url:' '${HA_CONFIG_DIR}/secrets.yaml' 2>/dev/null"; then
+  echo "Missing emhass_publish_url in ${HA_CONFIG_DIR}/secrets.yaml on Home Assistant." >&2
   echo "Add the key from docs/ha-secrets.example.yaml — see docs/SETUP.md" >&2
   exit 1
 fi
 
-ssh -p "${HA_SSH_PORT}" "${HA_SSH}" "mkdir -p ${HA}/backups/${BACKUP_PREFIX}-${STAMP} ${HA}/dashboards"
-ssh -p "${HA_SSH_PORT}" "${HA_SSH}" "cp ${HA}/configuration.yaml ${HA}/backups/${BACKUP_PREFIX}-${STAMP}/"
+remote "mkdir -p '${HA_CONFIG_DIR}/backups/${BACKUP_PREFIX}-${STAMP}' '${HA_CONFIG_DIR}/dashboards'"
+remote "cp '${HA_CONFIG_DIR}/configuration.yaml' '${HA_CONFIG_DIR}/backups/${BACKUP_PREFIX}-${STAMP}/'"
 
 upload() {
-  ssh -p "${HA_SSH_PORT}" "${HA_SSH}" "cat > ${HA}/$2" < "$1"
+  remote "cat > '${HA_CONFIG_DIR}/$2'" < "$1"
 }
 
 for f in ha_emhass.yaml ha_emhass_sensors.yaml ha_emhass_dashboard.yaml ha_emhass_monitoring.yaml ha_emhass_helpers.yaml ha_sigen_ems.yaml; do
@@ -45,15 +69,15 @@ for f in ha_emhass.yaml ha_emhass_sensors.yaml ha_emhass_dashboard.yaml ha_emhas
 done
 upload "${RENDERED}/dashboards/emhass_trading.yaml" "dashboards/emhass_trading.yaml"
 
-ssh -p "${HA_SSH_PORT}" "${HA_SSH}" "cat ${HA}/configuration.yaml" > "/tmp/ha_configuration_live.yaml"
+remote "cat '${HA_CONFIG_DIR}/configuration.yaml'" > "/tmp/ha_configuration_live.yaml"
 PYTHONPATH="${ROOT}/scripts/lib" "$PYTHON" "${ROOT}/scripts/lib/merge_ha_config_cli.py" \
   --manifest energy-stack \
   --live "/tmp/ha_configuration_live.yaml" \
   --out "/tmp/ha_configuration_merged.yaml"
 upload "/tmp/ha_configuration_merged.yaml" "configuration.yaml"
 
-echo "Running ha core check..."
-ssh -p "${HA_SSH_PORT}" "${HA_SSH}" "ha core check"
-echo "Restarting Home Assistant core..."
-ssh -p "${HA_SSH_PORT}" "${HA_SSH}" "ha core restart"
-echo "Deploy complete. Backup: ${HA}/backups/${BACKUP_PREFIX}-${STAMP}/"
+echo "Running Home Assistant config check (docker exec)..."
+remote "docker exec '${HA_CONTAINER_NAME}' hass --script check_config -c /config"
+echo "Restarting Home Assistant container..."
+remote "docker compose ${HA_COMPOSE_ARGS[*]} restart '${HA_CONTAINER_NAME}'"
+echo "Deploy complete. Backup: ${HA_CONFIG_DIR}/backups/${BACKUP_PREFIX}-${STAMP}/"

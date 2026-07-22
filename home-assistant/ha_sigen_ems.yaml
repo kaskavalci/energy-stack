@@ -513,11 +513,11 @@ automation:
         state: "off"
       - condition: template
         value_template: >
-          {% set last = states('input_datetime.emhass_last_limit_write') %}
-          {% if last in ['unknown', 'unavailable', ''] %}
+          {% set last_ts = state_attr('input_datetime.emhass_last_limit_write', 'timestamp') | float(0) %}
+          {% if last_ts <= 0 %}
             true
           {% else %}
-            {{ (as_timestamp(now()) - as_timestamp(last)) >= 300 }}
+            {{ (as_timestamp(now()) - last_ts) >= 300 }}
           {% endif %}
     action:
       - service: script.sigen_apply_emhass_plan
@@ -680,9 +680,8 @@ automation:
               | float(0)) > 0 }}
       - condition: template
         value_template: >-
-          {% set last = states('input_datetime.emhass_last_limit_write') %}
-          {{ last in ['unknown', 'unavailable', '']
-             or as_timestamp(now()) - as_timestamp(last) >= 300 }}
+          {% set last_ts = state_attr('input_datetime.emhass_last_limit_write', 'timestamp') | float(0) %}
+          {{ last_ts <= 0 or (as_timestamp(now()) - last_ts) >= 300 }}
     action:
       - service: script.sigen_start_recovery
 
@@ -780,10 +779,10 @@ automation:
         default:
           - condition: template
             value_template: >-
-              {% set last = states('input_datetime.emhass_last_limit_write') %}
+              {% set last_ts = state_attr('input_datetime.emhass_last_limit_write', 'timestamp') | float(0) %}
               {{ trigger.id in ['reconnect', 'ha_start']
-                 or last in ['unknown', 'unavailable', '']
-                 or as_timestamp(now()) - as_timestamp(last) >= 300 }}
+                 or last_ts <= 0
+                 or (as_timestamp(now()) - last_ts) >= 300 }}
           - condition: template
             value_template: "{{ soc is not none and 0 <= soc < target }}"
           - service: script.sigen_apply_active_recovery

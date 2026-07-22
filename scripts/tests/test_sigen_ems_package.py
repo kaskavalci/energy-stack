@@ -158,6 +158,13 @@ class EmhassMpcFreshnessContractTests(unittest.TestCase):
             "      - name: EMHASS MPC fresh\n", 1
         )[1].split("      - name: EMHASS plan valid\n", 1)[0]
         self.assertIn("input_datetime.emhass_last_successful_mpc", fresh)
+        # Use input_datetime timestamp attr — naive state strings break when
+        # container TZ ≠ HA time_zone (false plan_stale / negative age_min).
+        self.assertIn(
+            "state_attr('input_datetime.emhass_last_successful_mpc', 'timestamp')",
+            fresh,
+        )
+        self.assertNotIn("as_timestamp(completed", fresh)
         self.assertIn("age_s >= -5 * 60", fresh)
         self.assertIn("age_s < 40 * 60", fresh)
         self.assertIn("sensor.p_batt_forecast", fresh)
@@ -219,9 +226,14 @@ class EmhassRecoveryStateMachineTests(unittest.TestCase):
             normal_apply,
         )
         self.assertIn(
-            "{{ (as_timestamp(now()) - as_timestamp(last)) >= 300 }}",
+            "state_attr('input_datetime.emhass_last_limit_write', 'timestamp')",
             normal_apply,
         )
+        self.assertIn(
+            "{{ (as_timestamp(now()) - last_ts) >= 300 }}",
+            normal_apply,
+        )
+        self.assertNotIn("as_timestamp(last)", normal_apply)
         self.assertNotIn('minutes: "/30"', normal_apply)
         self.assertIn("binary_sensor.emhass_control_allowed", normal_apply)
         self.assertIn("input_boolean.emhass_recovery_active", normal_apply)

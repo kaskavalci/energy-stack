@@ -1,13 +1,13 @@
 # Setup guide
 
-**Last updated:** 2026-06-30
+**Last updated:** 2026-07-21
 
 Operator guide for a fresh clone of **energy-stack**.
 
 ## Prerequisites
 
 - Docker Compose on the **energy host**
-- Home Assistant with Zonneplan HACS integration
+- Home Assistant **Container** (Docker Compose) with Zonneplan HACS — see [ha-odroid-container-migration.md](ha-odroid-container-migration.md)
 - **[reterminal](https://github.com/)** P1 MQTT aliases deployed first — see [ENTITY_CONTRACT.md](ENTITY_CONTRACT.md)
 - Sigenergy inverter + `sigenergy2mqtt` (optional, for battery MPC + EMS)
 
@@ -44,16 +44,31 @@ General**. `TIME_ZONE` and `TZ` must be the same IANA timezone, for example
 recreates EMHASS so cached parameters cannot retain the container image's
 default location.
 
+## Home Assistant (Container)
+
+HA runs as Docker Container on the HA host (Odroid), not HAOS Supervisor.
+
+| `site.env` key | Purpose | Preferred default |
+|----------------|---------|-------------------|
+| `HA_SSH_HOST` / `HA_SSH_PORT` | SSH deploy target | `ha` / `22` |
+| `HA_CONFIG_DIR` | Host path mounted as `/config` | `/opt/homeassistant/config` |
+| `HA_COMPOSE_DIR` | Dir with `docker-compose.yml` | `/opt/homeassistant` |
+| `HA_COMPOSE_FILE` | Optional explicit compose file | unset |
+| `HA_CONTAINER_NAME` | Container / service name | `homeassistant` |
+
+Tracked Compose template: [`home-assistant/docker-compose.yml`](../home-assistant/docker-compose.yml). Deploy script uploads into `${HA_CONFIG_DIR}`, checks config via `docker exec`, and restarts via `docker compose` — no `ha` CLI and no interactive sudo (deploy user must own the config dir and be in the `docker` group).
+
+Pi → Odroid cutover: [ha-odroid-container-migration.md](ha-odroid-container-migration.md).
+
 ## Home Assistant secrets
 
-Add to `/config/secrets.yaml` on Home Assistant (not in this repo):
+Add to `${HA_CONFIG_DIR}/secrets.yaml` on Home Assistant (not in this repo):
 
 ```yaml
 emhass_publish_url: http://<ENERGY_HOST_IP>:5000/action/publish-data
 ```
 
-See [ha-secrets.example.yaml](ha-secrets.example.yaml). The URL must be reachable **from the HA host** (LAN IP of the energy Pi).
-
+See [ha-secrets.example.yaml](ha-secrets.example.yaml). The URL must be reachable **from the HA host** (LAN IP of the energy host).
 ## Entity placeholders
 
 HA package sources use `__TOKEN__` strings rendered at deploy time from `config/site.env`:
@@ -80,7 +95,7 @@ Find your Envoy entity under **Settings → Devices → Enphase Envoy**. Sigener
 ./scripts/deploy-home-assistant.sh
 ```
 
-`deploy-home-assistant.sh` always runs `render-ha-packages.sh` first and aborts if `emhass_publish_url` is missing from HA `secrets.yaml`.
+`deploy-home-assistant.sh` always runs `render-ha-packages.sh` first and aborts if `emhass_publish_url` is missing from HA `secrets.yaml`. It requires a writable `${HA_CONFIG_DIR}` and passwordless `docker` / `docker compose` on the HA host.
 
 ## Docker Compose
 

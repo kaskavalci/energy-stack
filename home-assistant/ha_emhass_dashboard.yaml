@@ -136,8 +136,7 @@ template:
         device_class: running
         state: >
           {% set bad = ['unknown', 'unavailable', 'none', ''] %}
-          {% set completed = states('input_datetime.emhass_last_successful_mpc') %}
-          {% set completed_ts = as_timestamp(completed, 0) %}
+          {% set completed_ts = state_attr('input_datetime.emhass_last_successful_mpc', 'timestamp') | float(0) %}
           {% set age_s = as_timestamp(now()) - completed_ts %}
           {% set pb = states('sensor.p_batt_forecast') %}
           {{ completed_ts > 0
@@ -149,8 +148,7 @@ template:
         attributes:
           reason: >
             {% set bad = ['unknown', 'unavailable', 'none', ''] %}
-            {% set completed = states('input_datetime.emhass_last_successful_mpc') %}
-            {% set completed_ts = as_timestamp(completed, 0) %}
+            {% set completed_ts = state_attr('input_datetime.emhass_last_successful_mpc', 'timestamp') | float(0) %}
             {% set age_s = as_timestamp(now()) - completed_ts %}
             {% set pb = states('sensor.p_batt_forecast') %}
             {% if pb in bad or (pb | float(none)) is none %}
@@ -163,7 +161,7 @@ template:
               ok
             {% endif %}
           age_min: >
-            {% set completed_ts = as_timestamp(states('input_datetime.emhass_last_successful_mpc'), 0) %}
+            {% set completed_ts = state_attr('input_datetime.emhass_last_successful_mpc', 'timestamp') | float(0) %}
             {{ ((as_timestamp(now()) - completed_ts) / 60) | round(1)
                if completed_ts > 0 else none }}
           last_successful_mpc: "{{ states('input_datetime.emhass_last_successful_mpc') }}"

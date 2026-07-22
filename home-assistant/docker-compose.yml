@@ -1,0 +1,21 @@
+# Home Assistant Container (Odroid / non-HAOS).
+# Deploy path on host: /opt/homeassistant/docker-compose.yml
+# Config volume: /opt/homeassistant/config → /config
+#
+# Requires: deploy user owns the config dir and is in the docker group
+# (no interactive sudo). network_mode: host for Envoy/Zeroconf/MQTT discovery.
+
+services:
+  homeassistant:
+    container_name: homeassistant
+    image: ghcr.io/home-assistant/home-assistant:stable
+    network_mode: host
+    # Must match HA time_zone (Europe/Amsterdam). Without this, container stays
+    # UTC and as_timestamp() on naive input_datetime strings ages MPC plans ~2h
+    # into the future → false plan_stale / control blocked.
+    environment:
+      TZ: Europe/Amsterdam
+    volumes:
+      # Relative to the compose file directory (default: /opt/homeassistant).
+      - ./config:/config
+    restart: unless-stopped
