@@ -15,7 +15,7 @@ from ruamel.yaml import YAML
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DASHBOARD = REPO_ROOT / "home-assistant" / "dashboards" / "emhass_trading.yaml"
 PV_CARD_TITLES = {
-    "Actual PV — yesterday and today",
+    "PV actual vs forecast — yesterday and today",
     "Today's PV forecast",
 }
 IF_NO_ROWS = "{%- if ns.count == 0 -%}"
@@ -168,6 +168,7 @@ class NativePvPanelTests(unittest.TestCase):
         actual = self.pv_panel()["cards"][0]
 
         self.assertEqual(actual.get("type"), "statistics-graph")
+        self.assertEqual(actual.get("title"), "PV actual vs forecast — yesterday and today")
         self.assertEqual(actual.get("days_to_show"), 2)
         self.assertEqual(actual.get("period"), "hour")
         self.assertEqual(actual.get("chart_type"), "line")
@@ -176,7 +177,11 @@ class NativePvPanelTests(unittest.TestCase):
         self.assertIsInstance(entities, list)
         self.assertEqual(
             [entity.get("entity") for entity in entities],
-            ["sensor.emhass_pv_power_w"],
+            ["sensor.emhass_pv_power_w", "sensor.p_pv_forecast"],
+        )
+        self.assertEqual(
+            [entity.get("name") for entity in entities],
+            ["Actual PV (hourly mean)", "Forecast PV (hourly mean)"],
         )
 
     def test_forecast_card_has_exact_subscription_and_today_only_logic(self) -> None:

@@ -100,7 +100,7 @@ views:
       - type: vertical-stack
         cards:
           - type: statistics-graph
-            title: Actual PV — yesterday and today
+            title: PV actual vs forecast — yesterday and today
             days_to_show: 2
             period: hour
             chart_type: line
@@ -109,6 +109,8 @@ views:
             entities:
               - entity: sensor.emhass_pv_power_w
                 name: Actual PV (hourly mean)
+              - entity: sensor.p_pv_forecast
+                name: Forecast PV (hourly mean)
 
           - type: markdown
             title: Today's PV forecast
