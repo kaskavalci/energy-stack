@@ -192,6 +192,101 @@ class EmhassMpcFreshnessContractTests(unittest.TestCase):
         self.assertNotIn("p_batt_forecast.last_updated", stale)
 
 
+class SigenIdleSelfConsumptionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.apply = package_text().split(
+            "  sigen_apply_emhass_plan:\n", 1
+        )[1].split("\nautomation:\n", 1)[0]
+
+    def floor_cutout(self) -> str:
+        return automation_block(
+            "emhass_soc_floor_cutout", "emhass_recovery_start"
+        )
+
+    def test_floor_cutout_covers_native_mode(self) -> None:
+        floor = self.floor_cutout()
+        trigger = floor.split("    trigger:\n", 1)[1].split(
+            "    condition:\n", 1
+        )[0]
+        condition = floor.split("    condition:\n", 1)[1].split(
+            "    action:\n", 1
+        )[0]
+        native_mode = "Maximum Self-consumption (Default)"
+        self.assertIn(native_mode, trigger)
+        self.assertIn(native_mode, condition)
+
+    def test_floor_cutout_is_inclusive_and_keeps_hard_stop(self) -> None:
+        floor = self.floor_cutout()
+        self.assertGreaterEqual(floor.count("0 <= soc <= min_soc"), 2)
+        self.assertIn("service: script.sigen_set_ems_mode", floor)
+        self.assertIn("mode: idle", floor)
+        self.assertIn("service: script.sigen_apply_idle_limits", floor)
+
+    def test_floor_cutout_is_restartable_and_preempts_limit_writers(self) -> None:
+        floor = self.floor_cutout()
+        action = floor.split("    action:\n", 1)[1]
+        preempt = action.split(
+            "      - service: script.sigen_set_ems_mode\n", 1
+        )[0]
+        self.assertIn("mode: restart", floor)
+        self.assertIn("service: script.turn_off", preempt)
+        self.assertIn("script.sigen_apply_emhass_plan", preempt)
+        self.assertIn("script.sigen_restore_native_control", preempt)
+        self.assertIn("script.sigen_set_ems_mode", preempt)
+        self.assertIn("script.sigen_apply_discharge_limits", preempt)
+        self.assertNotIn("script.sigen_apply_charge_limits", preempt)
+        self.assertNotIn("script.sigen_start_recovery", preempt)
+        self.assertNotIn("script.sigen_apply_active_recovery", preempt)
+
+    def test_floor_cutout_preempts_before_standby_and_zero_limits(self) -> None:
+        action = self.floor_cutout().split("    action:\n", 1)[1]
+        self.assertIn("service: script.turn_off", action)
+        preempt_position = action.index("service: script.turn_off")
+        standby_position = action.index("service: script.sigen_set_ems_mode")
+        zero_limits_position = action.index(
+            "service: script.sigen_apply_idle_limits"
+        )
+        self.assertLess(preempt_position, standby_position)
+        self.assertLess(preempt_position, zero_limits_position)
+
+    def test_true_deadband_uses_confirmed_native_restoration(self) -> None:
+        marker = (
+            'value_template: "{{ p >= (0 - threshold) '
+            'and p <= threshold }}"'
+        )
+        self.assertIn(marker, self.apply)
+        branch = self.apply.split(marker, 1)[1].split("        default:\n", 1)[0]
+        self.assertIn("service: script.sigen_restore_native_control", branch)
+        self.assertNotIn("service: script.sigen_apply_idle_limits", branch)
+
+    def test_rejected_positive_discharge_reaches_standby_not_native(self) -> None:
+        discharge_guard = (
+            'value_template: "{{ p > threshold and discharge_limit >= threshold '
+            'and soc > min_soc_frac * 100 }}"'
+        )
+        native_guard = (
+            'value_template: "{{ p >= (0 - threshold) '
+            'and p <= threshold }}"'
+        )
+        self.assertIn(discharge_guard, self.apply)
+        self.assertIn(native_guard, self.apply)
+        native_branch = self.apply.split(native_guard, 1)[1].split(
+            "        default:\n", 1
+        )[0]
+        self.assertNotIn("discharge_limit", native_branch)
+        fallback = self.apply.split("        default:\n", 1)[1]
+        self.assertIn("service: script.sigen_set_ems_mode", fallback)
+        self.assertIn("mode: idle", fallback)
+        self.assertIn("service: script.sigen_apply_idle_limits", fallback)
+
+    def test_final_fallback_remains_standby_with_zero_limits(self) -> None:
+        fallback = self.apply.split("        default:\n", 1)[1]
+        self.assertIn("service: script.sigen_set_ems_mode", fallback)
+        self.assertIn("mode: idle", fallback)
+        self.assertIn("service: script.sigen_apply_idle_limits", fallback)
+        self.assertNotIn("service: script.sigen_restore_native_control", fallback)
+
+
 class EmhassRecoveryStateMachineTests(unittest.TestCase):
     def setUp(self) -> None:
         self.package = package_text()

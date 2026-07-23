@@ -431,6 +431,11 @@ script:
               - service: script.sigen_apply_discharge_limits
                 data:
                   watts: "{{ discharge_limit }}"
+          - conditions:
+              - condition: template
+                value_template: "{{ p >= (0 - threshold) and p <= threshold }}"
+            sequence:
+              - service: script.sigen_restore_native_control
         default:
           - service: script.sigen_set_ems_mode
             data:
@@ -595,28 +600,39 @@ automation:
     description: >-
       Real-time safety net: immediately stops discharge when SOC crosses the floor,
       without waiting for the next :00/:30 apply cycle.
-    mode: single
+    mode: restart
     trigger:
-      - platform: numeric_state
-        entity_id: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
-        below: input_number.emhass_soc_min
+      - platform: template
+        value_template: >-
+          {% set soc = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(none) %}
+          {% set min_soc = states('input_number.emhass_soc_min') | float(5) %}
+          {{ soc is not none and 0 <= soc <= min_soc }}
       - platform: state
         entity_id: select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode
         to:
           - "Command Discharging (Output power from PV first)"
           - "Command Discharging (Output power from the battery first)"
+          - "Maximum Self-consumption (Default)"
     condition:
-      # We must be below the reserve floor
-      - condition: numeric_state
-        entity_id: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
-        below: input_number.emhass_soc_min
-      # Only intervene if we are actively discharging
+      - condition: template
+        value_template: >-
+          {% set soc = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(none) %}
+          {% set min_soc = states('input_number.emhass_soc_min') | float(5) %}
+          {{ soc is not none and 0 <= soc <= min_soc }}
       - condition: template
         value_template: >-
           {{ states('select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode')
              in ['Command Discharging (Output power from PV first)',
-                 'Command Discharging (Output power from the battery first)'] }}
+                 'Command Discharging (Output power from the battery first)',
+                 'Maximum Self-consumption (Default)'] }}
     action:
+      - service: script.turn_off
+        target:
+          entity_id:
+            - script.sigen_apply_emhass_plan
+            - script.sigen_restore_native_control
+            - script.sigen_set_ems_mode
+            - script.sigen_apply_discharge_limits
       - service: script.sigen_set_ems_mode
         data:
           mode: idle

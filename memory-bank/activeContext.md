@@ -1,7 +1,24 @@
 # Active Context
 
-**Last updated:** 2026-07-22 ~20:36 CEST
-**Author:** Composer
+**Last updated:** 2026-07-23 ~07:25 CEST
+**Author:** Codex
+
+## EMHASS idle self-consumption (2026-07-23) — DEPLOYED
+
+- Deployed the reviewed HA package to the configured Odroid HA Container through
+  `scripts/deploy-home-assistant.sh`; rendering, the container configuration
+  check, restart, and post-restart REST checks succeeded. Backup:
+  `/home/halil/homeassistant/config/backups/energy-stack-20260723-072242/`.
+- The master remained **on** and `emhass_control_allowed` remained **on**.
+  Post-deploy `p_batt_forecast=3600 W` was outside the `500 W` deadband, so no
+  idle command was manufactured; live idle-path verification is deferred until
+  a natural deadband interval.
+- The live non-idle plan applied normally: command-discharge mode, charge limit
+  `0.0 kW`, discharge limit `3.6 kW`.
+- Live package inspection confirms native maximum self-consumption is used only
+  by the true deadband branch. At or below the inclusive SOC floor, the cutout
+  covers native/discharge modes, preempts stale mode/discharge writers, then
+  selects Standby and applies zero limits. Recovery charging remains unchanged.
 
 ## CoreELEC weather.ha → Odroid HA (2026-07-22) — FIXED
 
