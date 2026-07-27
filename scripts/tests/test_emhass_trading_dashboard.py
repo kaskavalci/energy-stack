@@ -219,24 +219,134 @@ class NativePvPanelTests(unittest.TestCase):
         self.assertLess(row_position, matching_endif_position)
         self.assertLess(matching_endif_position, endfor_position)
 
-    def test_dashboard_has_no_custom_card_or_apexcharts_resource(self) -> None:
+    def test_dashboard_allows_only_expected_custom_cards(self) -> None:
         custom_types = [
             node["type"]
             for node in iter_mappings(self.dashboard)
             if isinstance(node.get("type"), str)
             and node["type"].startswith("custom:")
         ]
-        resources = self.dashboard.get("resources", [])
-        apexcharts_resources = [
-            resource
-            for resource in resources
-            if "apexcharts" in (
-                resource if isinstance(resource, str) else str(resource.get("url", ""))
-            ).lower()
+        self.assertEqual(
+            custom_types,
+            ["custom:config-template-card", "custom:apexcharts-card"],
+        )
+        self.assertEqual(self.dashboard.get("resources", []), [])
+
+    def trading_view(self) -> Mapping[str, Any]:
+        views = self.dashboard.get("views", [])
+        return next(
+            view
+            for view in views
+            if isinstance(view, Mapping) and view.get("path") == "emhass-trading"
+        )
+
+    def card_titles(self) -> list[str]:
+        return [
+            card.get("title")
+            for card in self.trading_view().get("cards", [])
+            if isinstance(card, Mapping) and card.get("title")
         ]
 
-        self.assertEqual(custom_types, [])
-        self.assertEqual(apexcharts_resources, [])
+    def test_prices_card_includes_net_electricity_profit(self) -> None:
+        prices = next(
+            card
+            for card in self.trading_view().get("cards", [])
+            if isinstance(card, Mapping) and card.get("title") == "Prices"
+        )
+        entities = prices.get("entities")
+        self.assertIsInstance(entities, list)
+        self.assertEqual(
+            [row.get("entity") for row in entities if isinstance(row, Mapping)],
+            [
+                "sensor.unit_load_cost",
+                "sensor.unit_prod_price",
+                "sensor.emhass_price_rank_now",
+                "sensor.emhass_net_electricity_profit_today",
+                "sensor.emhass_net_electricity_profit_month",
+            ],
+        )
+        named = {
+            row["entity"]: row.get("name")
+            for row in entities
+            if isinstance(row, Mapping) and "name" in row
+        }
+        self.assertEqual(named["sensor.emhass_net_electricity_profit_today"], "Net profit today")
+        self.assertEqual(
+            named["sensor.emhass_net_electricity_profit_month"], "Net profit this month"
+        )
+
+    def test_removed_active_step_and_pv_model_panels(self) -> None:
+        titles = self.card_titles()
+        self.assertNotIn("Active step (first row only)", titles)
+        self.assertNotIn("PV — model vs actual", titles)
+
+    def test_actual_panel_drops_status_duplicates(self) -> None:
+        actual = next(
+            card
+            for card in self.trading_view().get("cards", [])
+            if isinstance(card, Mapping) and card.get("title") == "Actual (Sigen / P1)"
+        )
+        entities = [
+            row.get("entity")
+            for row in actual.get("entities", [])
+            if isinstance(row, Mapping)
+        ]
+        self.assertEqual(
+            entities,
+            [
+                "sensor.emhass_house_load_power_w",
+                "__P1_POWER_CONSUMPTION_ENTITY__",
+                "__P1_POWER_PRODUCTION_ENTITY__",
+                "sensor.net_electricity_today",
+            ],
+        )
+        for duplicate in (
+            "sensor.__SIGEN_PLANT_SLUG___plant_battery_soc",
+            "sensor.__SIGEN_PLANT_SLUG___plant_battery_power",
+            "__P1_POWER_NET_ENTITY__",
+        ):
+            self.assertNotIn(duplicate, entities)
+
+    def test_import_price_forecast_uses_full_zonneplan_horizon(self) -> None:
+        wrapper = next(
+            c
+            for c in self.trading_view().get("cards", [])
+            if isinstance(c, Mapping) and c.get("type") == "custom:config-template-card"
+        )
+        self.assertEqual(
+            wrapper.get("entities"),
+            ["sensor.zonneplan_current_electricity_tariff"],
+        )
+        variables = wrapper.get("variables")
+        self.assertIsInstance(variables, Mapping)
+        price_span = variables.get("price_span")
+        self.assertIsInstance(price_span, str)
+        self.assertIn("sensor.zonneplan_current_electricity_tariff", price_span)
+        self.assertIn(".attributes.forecast", price_span)
+        self.assertIn("rows[rows.length - 1].datetime", price_span)
+
+        card = wrapper.get("card")
+        self.assertIsInstance(card, Mapping)
+        self.assertEqual(card.get("type"), "custom:apexcharts-card")
+        self.assertEqual(card.get("header", {}).get("title"), "Import price forecast")
+        self.assertEqual(card.get("graph_span"), "${price_span}")
+        series = card.get("series")
+        self.assertIsInstance(series, list)
+        self.assertEqual(len(series), 1)
+        price = series[0]
+        self.assertEqual(
+            price.get("entity"), "sensor.zonneplan_current_electricity_tariff"
+        )
+        self.assertEqual(price.get("extend_to"), False)
+        self.assertEqual(price.get("float_precision"), 2)
+        self.assertEqual(card.get("yaxis")[0].get("decimals"), 2)
+        generator = price.get("data_generator")
+        self.assertIsInstance(generator, str)
+        self.assertIn("entity.attributes.forecast", generator)
+        self.assertIn("electricity_price", generator)
+        self.assertIn("/ 1e7", generator)
+        self.assertNotIn("unit_load_cost_forecasts", generator)
+        self.assertNotIn("Import price (published steps)", self.card_titles())
 
 
 if __name__ == "__main__":

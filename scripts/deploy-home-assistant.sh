@@ -60,6 +60,9 @@ fi
 remote "mkdir -p '${HA_CONFIG_DIR}/backups/${BACKUP_PREFIX}-${STAMP}' '${HA_CONFIG_DIR}/dashboards'"
 remote "cp '${HA_CONFIG_DIR}/configuration.yaml' '${HA_CONFIG_DIR}/backups/${BACKUP_PREFIX}-${STAMP}/'"
 
+# Import price forecast chart (custom:apexcharts-card) — ensure JS + Lovelace resource.
+"${ROOT}/scripts/install-ha-apexcharts.sh"
+
 upload() {
   remote "cat > '${HA_CONFIG_DIR}/$2'" < "$1"
 }

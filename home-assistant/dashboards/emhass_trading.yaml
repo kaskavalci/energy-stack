@@ -28,49 +28,19 @@ views:
 
 
       - type: entities
-        title: Active step (first row only)
-        entities:
-          - entity: sensor.p_batt_forecast
-            name: Battery power forecast
-          - entity: sensor.emhass_batt_charge_power_w
-            name: Sigen charge cap (if charging)
-          - entity: sensor.emhass_batt_discharge_power_w
-            name: Sigen discharge cap (if discharging)
-          - entity: sensor.p_grid_forecast
-            name: Grid power forecast
-          - entity: sensor.p_load_forecast
-            name: Load forecast
-          - entity: sensor.p_pv_forecast
-            name: PV power forecast
-          - entity: sensor.soc_batt_forecast
-            name: SOC after this step
-          - entity: sensor.unit_load_cost
-            name: Import price this step
-
-      - type: entities
         title: Prices
         entities:
           - entity: sensor.unit_load_cost
           - entity: sensor.unit_prod_price
           - entity: sensor.emhass_price_rank_now
-
-      - type: entities
-        title: PV — model vs actual
-        entities:
-          - entity: sensor.p_pv_forecast
-            name: EMHASS forecast (active step)
-          - entity: __ENVOY_PV_ENTITY__
-            name: Enphase Envoy (live)
-          - entity: sensor.emhass_pv_power_w
-            name: Envoy in W (HA feed)
+          - entity: sensor.emhass_net_electricity_profit_today
+            name: Net profit today
+          - entity: sensor.emhass_net_electricity_profit_month
+            name: Net profit this month
 
       - type: entities
         title: Actual (Sigen / P1)
         entities:
-          - entity: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
-          - entity: sensor.__SIGEN_PLANT_SLUG___plant_battery_power
-          - entity: __P1_POWER_NET_ENTITY__
-            name: P1 grid net (+ import, − export)
           - entity: sensor.emhass_house_load_power_w
             name: Derived house load
           - entity: __P1_POWER_CONSUMPTION_ENTITY__
@@ -140,11 +110,61 @@ views:
               </table>
               {%- endif -%}
 
-      - type: history-graph
-        title: Import price (published steps)
-        hours_to_show: 48
+      - type: custom:config-template-card
         entities:
-          - entity: sensor.unit_load_cost
+          - sensor.zonneplan_current_electricity_tariff
+        variables:
+          price_span: |
+            (() => {
+              const rows = states['sensor.zonneplan_current_electricity_tariff'].attributes.forecast || [];
+              if (!rows.length) return '30min';
+              const last = new Date(rows[rows.length - 1].datetime).getTime();
+              // Hourly slots: last datetime is the hour start; include that full hour.
+              const end = last + 60 * 60 * 1000;
+              const mins = Math.max(30, Math.ceil((end - Date.now()) / 60000));
+              return `${mins}min`;
+            })()
+        card:
+          type: custom:apexcharts-card
+          header:
+            show: true
+            title: Import price forecast
+            show_states: true
+            colorize_states: true
+          graph_span: ${price_span}
+          span:
+            start: minute
+          now:
+            show: true
+            label: now
+          yaxis:
+            - id: price
+              decimals: 2
+              apex_config:
+                title:
+                  text: €/kWh
+          series:
+            - entity: sensor.zonneplan_current_electricity_tariff
+              name: Import
+              type: area
+              curve: stepline
+              stroke_width: 2
+              unit: €/kWh
+              yaxis_id: price
+              float_precision: 2
+              extend_to: false
+              show:
+                in_header: after_now
+                extremas: true
+                legend_value: false
+              data_generator: |
+                const now = Date.now();
+                return (entity.attributes.forecast || [])
+                  .map((row) => [
+                    new Date(row.datetime).getTime(),
+                    Number(row.electricity_price) / 1e7,
+                  ])
+                  .filter(([ts, value]) => Number.isFinite(ts) && Number.isFinite(value) && ts >= now - 65 * 60 * 1000);
 
       - type: markdown
         title: Upcoming plan (MPC horizon)
