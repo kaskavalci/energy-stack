@@ -25,17 +25,33 @@ HA itself runs on the **HA host** via [`home-assistant/docker-compose.yml`](../h
 - Price methods: **csv**; weather: **open-meteo**
 - `open_meteo_cache_max_age`: **120** min — must stay **>** MPC cadence
 - Price fetch failure → **abort MPC**
+- Load forecast failure is fail-closed. EMHASS uses
+  `sensor.emhass_house_load_sample_w` with native `naive`; cron must not send a
+  load list or fabricate a constant, dynamic, or cached load fallback.
+- The native-load history gate requires a fresh sample and 32 consecutive
+  real UTC half-hour bins. Required bins are anchored to the newest fresh
+  recorder-visible sample so exact `:00`/`:30` runs tolerate recorder
+  visibility lag without weakening coverage.
 - Weather retry → `clear_weather_cache_files()` before `weather-forecast-cache`
 - Shared stale logic: `lib/weather_cache_stale.py`
 - EMHASS site location comes from validated `LAT`, `LON`, `ALT`, and
   `TIME_ZONE` in gitignored `config/site.env`; never rely on image defaults.
 - `TZ` and `TIME_ZONE` must match.
 - The trading dashboard uses native hourly statistics plus a today-only PV
-  forecast table; do not add custom chart resources unless the HA host has
-  comfortable RAM headroom (Odroid migration target).
+  forecast table. Import price forecast uses **ApexCharts** wrapped in
+  **config-template-card**, fed from Zonneplan
+  `sensor.zonneplan_current_electricity_tariff` `forecast` (full day-ahead;
+  `electricity_price / 1e7`). Span tracks the last hourly slot (`extend_to:
+  false`). This is intentionally **not** bounded by EMHASS
+  `prediction_horizon` / `unit_load_cost_forecasts`. Install frontend cards via
+  `scripts/install-ha-apexcharts.sh` (also run from `deploy-home-assistant.sh`).
+  Avoid additional custom chart cards unless needed.
 - Master-off or control-failure fallback selects Sigenergy native
   `Maximum Self-consumption (Default)` automatically; operators do not select it
   during healthy MPC trading.
+- A healthy true idle/deadband command also selects native maximum
+  self-consumption at any SOC. The SOC-floor cutout applies only to explicit
+  command-discharge modes; charge and recovery behavior is unchanged.
 - Every Sigenergy charge/discharge limit is clamped to the MQTT number entity's
   advertised `max`; native restoration is successful only after mode and both
   limits are confirmed, then `emhass_last_limit_write` advances.

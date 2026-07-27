@@ -1,24 +1,75 @@
 # Active Context
 
-**Last updated:** 2026-07-23 ~07:25 CEST
-**Author:** Codex
+**Last updated:** 2026-07-27 ~23:02 CEST
+**Author:** Auto
 
-## EMHASS idle self-consumption (2026-07-23) — DEPLOYED
+## Native naive load cutover — deployed; `:00` + `:30` verified; 24h open (2026-07-27)
 
-- Deployed the reviewed HA package to the configured Odroid HA Container through
-  `scripts/deploy-home-assistant.sh`; rendering, the container configuration
-  check, restart, and post-restart REST checks succeeded. Backup:
-  `/home/halil/homeassistant/config/backups/energy-stack-20260723-072242/`.
-- The master remained **on** and `emhass_control_allowed` remained **on**.
-  Post-deploy `p_batt_forecast=3600 W` was outside the `500 W` deadband, so no
-  idle command was manufactured; live idle-path verification is deferred until
-  a natural deadband interval.
-- The live non-idle plan applied normally: command-discharge mode, charge limit
-  `0.0 kW`, discharge limit `3.6 kW`.
-- Live package inspection confirms native maximum self-consumption is used only
-  by the true deadband branch. At or below the inclusive SOC floor, the cutout
-  covers native/discharge modes, preempts stale mode/discharge writers, then
-  selects Standby and applies zero limits. Recovery charging remains unchanged.
+- HA `sensor.emhass_house_load_sample_w` is deployed and healthy at one-minute
+  cadence with `W`, `power`, and `measurement` metadata. Configuration-only HA
+  backup:
+  `/home/halil/homeassistant/config/backups/energy-stack-20260726-230722/`.
+- Energy cutover deployed native `naive` load history from that sampled sensor.
+  Cron no longer sends a load list, `alpha`, `beta`, or a 300 W fill.
+  `set_zero_min` is false, so genuine `0 W` samples remain valid.
+- The fail-closed history gate uses UTC instants, one immutable HA credential
+  snapshot, narrow external-boundary errors, a five-minute freshness limit,
+  and all 32 consecutive real half-hour bins. It makes no history retry and
+  has no fixed, dynamic, or cached load fallback.
+- The first natural `22:00` run exposed recorder visibility lag: its
+  `22:00:00.129` sample was not yet visible at `22:00:02`, so the gate safely
+  aborted before optimization and left the successful marker unchanged.
+  The reviewed fix queries one extra bin and anchors required coverage to the
+  newest fresh UTC sample. This preserves all 32 bins while avoiding a
+  brand-new-bin race.
+- Manual MPC after the boundary fix was `Optimal` and completed at `22:18:44`.
+  Untouched natural `22:30` passed (32/32 via `22:29` sample; marker
+  `22:30:44`). Untouched natural `23:00` also passed: started `23:00:00`,
+  newest sample `22:59:00.128`, history `32/32`, `Optimal`, publish OK,
+  `job succeeded` `23:00:43`, `mpc.ok=true` at `23:00:42`, HA successful
+  marker `2026-07-27 23:00:42`, master/freshness/control `on`/`ok`. No NaN
+  or `get_mix_forecast` traceback.
+- Original pre-cutover rollback backup:
+  `/home/halil/workspace/energy-stack/backups/native-load-20260727-215554/`.
+  Pre-boundary-fix native-load backup:
+  `/home/halil/workspace/energy-stack/backups/native-load-boundary-20260727-221538/`.
+- Still pending before marking the cutover fully verified: one retrospective
+  24-hour audit after **2026-07-28 22:31 CEST** (success/failure count, NaN
+  tracebacks, history coverage, stale-plan/native-control transitions). Do
+  not wait interactively. Handoff:
+  `memory-bank/notebook/native-load-cutover-handoff-2026-07-27.md`.
+
+## B2_mpc NaN failures (2026-07-26) — SUPERSEDED by native-load cutover
+
+Root cause was the tariff-placeholder + alpha/beta mix path. Native
+`sensor.emhass_house_load_sample_w` + no alpha/beta payload removes that
+crash mechanism. Keep the analysis for history; do not re-apply the old
+placeholder/mix mitigations unless the cutover is rolled back.
+
+## Net electricity profit + ApexCharts import forecast (2026-07-23) — DEPLOYED
+
+- Profit sensors on Prices card (production − delivery).
+- Import price forecast chart reads **Zonneplan**
+  `sensor.zonneplan_current_electricity_tariff` `forecast` (full day-ahead),
+  not EMHASS `unit_load_cost_forecasts` (MPC-capped). Span tracks the last
+  Zonneplan hourly slot; `extend_to: false`.
+
+## EMHASS idle self-consumption (2026-07-24) — DEPLOYED + VERIFIED
+
+- True idle/deadband now always selects Sigenergy native
+  `Maximum Self-consumption (Default)` with confirmed operator/device-valid
+  limits, including at or below the configured SOC floor.
+- The floor cutout covers only the two explicit command-discharge modes. It
+  still preempts stale discharge writers and applies Standby/zero limits; if a
+  simultaneous plan update has become idle, it restores native control after
+  the hard stop. Recovery charging remains unchanged.
+- Deployed to the configured Odroid HA Container with a successful render,
+  container config check, and restart. Backup:
+  `/home/halil/homeassistant/config/backups/energy-stack-20260724-100444/`.
+- Live verification at `p_batt_forecast=0 W`, threshold `500 W`, and SOC
+  `5.1%`: master/control remained **on**, recovery **off**, mode confirmed
+  native, charge/discharge limits restored to `8.8/9.0 kW`, battery absorbed
+  about `695 W`, and P1 grid flow was approximately `−6 W` (near-zero export).
 
 ## CoreELEC weather.ha → Odroid HA (2026-07-22) — FIXED
 
@@ -195,7 +246,8 @@ Full schedule: `memory-bank/progress.md` § "What needs to be done, when".
 
 **Actionable Alerts Policy (HA)** — Deployed (2026-07-01). See `memory-bank/notebook/emhass-actionable-alerts-policy.md`.
 
-**Load forecast** — constant 300 W per MPC slot; `sensor.emhass_house_load_power_w` for observability only (not EMHASS config).
+**Load forecast** — native `naive` from `sensor.emhass_house_load_sample_w`
+(cutover 2026-07-27). Old 300 W fill / tariff placeholder retired.
 
 ## Verification
 
