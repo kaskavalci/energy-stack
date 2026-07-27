@@ -1,6 +1,6 @@
 # Entity and package contract (cross-repo)
 
-**Last updated:** 2026-06-30
+**Last updated:** 2026-07-26
 
 EMHASS on the energy host and HA packages in this repo depend on stable entity IDs on Home Assistant. Some IDs are created by the **reterminal** repo (P1 MQTT aliases and daily helpers).
 
@@ -41,7 +41,8 @@ Package keys keep the `reterminal_emhass_*` prefix on live HA for zero-downtime 
 |-----------------|-------------|---------|
 | `sensor.electricity_meter_power_net` | reterminal P1 aliases | `ha_emhass_sensors.yaml`, house load |
 | `sensor.electricity_meter_power_*` | reterminal P1 aliases | Monitoring, dashboards |
-| `sensor.emhass_house_load_power_w` | energy-stack templates | `config.json`, MPC load source |
+| `sensor.emhass_house_load_power_w` | energy-stack templates | Instantaneous calculated house load |
+| `sensor.emhass_house_load_sample_w` | energy-stack templates | EMHASS history / naive-forecast source, sampled every minute (W) |
 | `sensor.emhass_pv_power_w` | energy-stack templates | PV observation |
 | `sensor.zonneplan_current_electricity_tariff` | HA HACS | emhass-cron price fetch |
 | `sensor.sigen_0_plant_battery_soc` | sigenergy2mqtt | MPC `soc_init` |

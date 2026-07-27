@@ -19,6 +19,12 @@ REMOTE_DIR="${ENERGY_REMOTE_DIR}"
 rsync -avz \
   --exclude '.git' \
   --exclude '.venv' \
+  --exclude '/.worktrees/' \
+  --exclude '/.superpowers/' \
+  --exclude '/.rendered/' \
+  --exclude '/.bug-hunter/' \
+  --exclude '/.pytest_cache/' \
+  --exclude '/.cursorrules' \
   --exclude 'home-assistant' \
   --exclude 'scripts' \
   --exclude 'docs' \
@@ -30,6 +36,7 @@ rsync -avz \
   --exclude 'configuration.yaml' \
   --exclude 'emhass/share/data_*_forecast.csv' \
   --exclude 'emhass/share/prices_fetched_at.txt' \
+  --exclude '/emhass/share/last_enever_run.json' \
   --exclude 'emhass/share/config.json.bak*' \
   --exclude '__pycache__' \
   "${ROOT}/" "${REMOTE_HOST}:${REMOTE_DIR}/"

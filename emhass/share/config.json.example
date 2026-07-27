@@ -1,5 +1,5 @@
 {
-  "_workaround_notes": "2026-07-11: EMHASS still fetches HA history for configured sensors during naive-mpc-optim. When recorder returns HTTP 500 for full-day windows, use placeholders below. Revert after HA recorder repair (Jul 11 07 UTC, Jul 10 14 UTC): load keys -> sensor.electricity_meter_power_consumption; PV keys -> sensor.emhass_pv_power_w. EMHASS rejects identical load and PV sensors — PV placeholder must differ from load.",
+  "_native_load_history_note": "Native naive load history requires the Home Assistant one-minute sampled sensor sensor.emhass_house_load_sample_w. set_zero_min is false because a genuine 0 W sample is valid load history and must not be replaced.",
   "logging_level": "INFO",
   "costfun": "profit",
   "optimization_time_step": 30,
@@ -20,14 +20,15 @@
   "battery_dynamic_min": -0.9,
   "weight_battery_discharge": 0,
   "weight_battery_charge": 0,
-  "sensor_power_photovoltaics": "sensor.p_pv_forecast",
-  "sensor_power_photovoltaics_forecast": "sensor.p_pv_forecast",
-  "sensor_power_load_no_var_loads": "sensor.zonneplan_current_electricity_tariff",
+  "sensor_power_photovoltaics": "sensor.emhass_pv_power_w",
+  "sensor_power_photovoltaics_forecast": "sensor.emhass_pv_power_w",
+  "sensor_power_load_no_var_loads": "sensor.emhass_house_load_sample_w",
   "sensor_replace_zero": [
-    "sensor.p_pv_forecast"
+    "sensor.emhass_pv_power_w"
   ],
   "sensor_linear_interp": [
-    "sensor.p_pv_forecast"
+    "sensor.emhass_house_load_sample_w",
+    "sensor.emhass_pv_power_w"
   ],
   "use_websocket": false,
   "use_influxdb": false,
@@ -39,7 +40,7 @@
   "influxdb_use_ssl": false,
   "influxdb_verify_ssl": false,
   "load_negative": false,
-  "set_zero_min": true,
+  "set_zero_min": false,
   "number_of_deferrable_loads": 0,
   "nominal_power_of_deferrable_loads": [],
   "minimum_power_of_deferrable_loads": [],
@@ -51,7 +52,7 @@
   "open_meteo_cache_max_age": 120,
   "load_forecast_method": "naive",
   "model_type": "load_forecast",
-  "var_model": "sensor.zonneplan_current_electricity_tariff",
+  "var_model": "sensor.emhass_house_load_sample_w",
   "sklearn_model": "KNeighborsRegressor",
   "num_lags": 48,
   "split_date_delta": "48h",

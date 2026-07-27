@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -92,6 +96,123 @@ class SiteLocationWiringTests(unittest.TestCase):
 
     def test_deploy_force_recreates_emhass(self) -> None:
         self.assertIn("docker compose up -d --force-recreate emhass", self.deploy)
+
+    def test_deploy_excludes_local_artifacts_and_keeps_runtime_files(self) -> None:
+        real_rsync = shutil.which("rsync")
+        if real_rsync is None:
+            self.skipTest("rsync is required for the deploy-filter regression test")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            fixture_root = Path(tmp) / "repo"
+            remote_root = Path(tmp) / "remote"
+            bin_dir = Path(tmp) / "bin"
+            for path in (
+                fixture_root / "scripts" / "lib",
+                fixture_root / "config",
+                remote_root,
+                bin_dir,
+            ):
+                path.mkdir(parents=True, exist_ok=True)
+
+            shutil.copy2(
+                REPO_ROOT / "scripts" / "deploy-energy-stack.sh",
+                fixture_root / "scripts" / "deploy-energy-stack.sh",
+            )
+            for name in ("source-site-env.sh", "validate_site_location.py"):
+                shutil.copy2(
+                    REPO_ROOT / "scripts" / "lib" / name,
+                    fixture_root / "scripts" / "lib" / name,
+                )
+
+            (fixture_root / "config" / "site.env").write_text(
+                "LAT=52\n"
+                "LON=5\n"
+                "ALT=0\n"
+                "TIME_ZONE=Europe/Amsterdam\n"
+                "TZ=Europe/Amsterdam\n"
+                "ENERGY_REMOTE_HOST=test-host\n"
+                "ENERGY_REMOTE_DIR=/srv/energy-stack\n",
+                encoding="utf-8",
+            )
+
+            artifact_dirs = (
+                ".worktrees",
+                ".superpowers",
+                ".rendered",
+                ".bug-hunter",
+                ".pytest_cache",
+            )
+            for name in artifact_dirs:
+                path = fixture_root / name
+                path.mkdir()
+                (path / "local-only.txt").write_text(name, encoding="utf-8")
+
+            artifact_files = (
+                ".cursorrules",
+                "emhass/share/last_enever_run.json",
+            )
+            for relative in artifact_files:
+                path = fixture_root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(relative, encoding="utf-8")
+
+            runtime_files = (
+                "docker-compose.yml",
+                "emhass-cron/fetch_prices_emhass.py",
+                "emhass/share/config.json.example",
+                "monitor/health_notify.py",
+            )
+            for relative in runtime_files:
+                path = fixture_root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(relative, encoding="utf-8")
+
+            fake_rsync = bin_dir / "rsync"
+            fake_rsync.write_text(
+                "#!/usr/bin/env python3\n"
+                "import os\n"
+                "import subprocess\n"
+                "import sys\n"
+                "args = sys.argv[1:]\n"
+                "args[-1] = os.environ['TEST_RSYNC_DEST']\n"
+                "raise SystemExit(subprocess.run("
+                "[os.environ['REAL_RSYNC'], *args]).returncode)\n",
+                encoding="utf-8",
+            )
+            fake_rsync.chmod(0o755)
+            fake_ssh = bin_dir / "ssh"
+            fake_ssh.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            fake_ssh.chmod(0o755)
+
+            env = dict(os.environ)
+            env.update(
+                {
+                    "PATH": f"{bin_dir}{os.pathsep}{env['PATH']}",
+                    "REAL_RSYNC": real_rsync,
+                    "TEST_RSYNC_DEST": f"{remote_root}/",
+                }
+            )
+            subprocess.run(
+                [fixture_root / "scripts" / "deploy-energy-stack.sh"],
+                cwd=fixture_root,
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
+            for name in artifact_dirs:
+                with self.subTest(excluded=name):
+                    self.assertFalse((remote_root / name).exists())
+            for relative in artifact_files:
+                with self.subTest(excluded=relative):
+                    self.assertFalse((remote_root / relative).exists())
+            for relative in runtime_files:
+                with self.subTest(included=relative):
+                    self.assertEqual(
+                        (remote_root / relative).read_text(encoding="utf-8"),
+                        relative,
+                    )
 
 
 if __name__ == "__main__":

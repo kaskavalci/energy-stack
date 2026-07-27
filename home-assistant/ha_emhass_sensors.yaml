@@ -80,3 +80,22 @@ template:
             {% set ns.ok = false %}
           {% endif %}
           {{ ns.ok }}
+
+  - trigger:
+      - platform: time_pattern
+        seconds: "0"
+    sensor:
+      - name: EMHASS house load sample
+        unique_id: emhass_house_load_sample_w
+        default_entity_id: sensor.emhass_house_load_sample_w
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >
+          {{ states('sensor.emhass_house_load_power_w') | float(0) | round(0) }}
+        availability: >
+          {% set value = states('sensor.emhass_house_load_power_w') %}
+          {{ value not in ['unknown', 'unavailable', 'none', '']
+             and (value | float(none)) is not none }}
+        attributes:
+          sampled_at: "{{ now().isoformat() }}"

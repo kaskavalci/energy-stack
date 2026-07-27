@@ -15,11 +15,12 @@ import math
 import os
 import sys
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from http.client import HTTPException
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
@@ -73,10 +74,6 @@ LOAD_COST_CSV = "data_load_cost_forecast.csv"
 PROD_PRICE_CSV = "data_prod_price_forecast.csv"
 DEFAULT_EXPORT_PRICE_HAIRCUT = _env_float("EXPORT_PRICE_HAIRCUT_EUR_PER_KWH", 0.04)
 DEFAULT_PREDICTION_HORIZON = 32
-LOAD_FORECAST_CONSTANT_W = 300.0
-LOAD_FORECAST_MODE = "constant_300w"
-LOAD_FORECAST_MIX_ALPHA = 1.0
-LOAD_FORECAST_MIX_BETA = 0.0
 MIN_PRICE_SLOTS = 12  # 6 h @ 30 min — below this, abort MPC
 # Keep in sync with check_weather_failure_in_last_mpc in health_notify.py (B4)
 WEATHER_FAILURE_KEYWORDS = (
@@ -90,6 +87,10 @@ WEATHER_CACHE_RETRY_BACKOFF_S = (15.0, 45.0)
 MPC_SUCCESS_ENTITY_ID = "input_datetime.emhass_last_successful_mpc"
 MPC_STATUS_MAX_ATTEMPTS = 3
 MPC_STATUS_RETRY_DELAY_S = 2.0
+
+
+class LoadHistoryError(RuntimeError):
+    """Expected load-history config, retrieval, or validation failure."""
 
 
 def _parse_simple_yaml_value(text: str, key: str) -> str | None:
@@ -132,20 +133,307 @@ def fetch_ha_state(
     secrets_path: Path,
     entity_id: str,
     timeout: float = 15,
+    *,
+    credentials: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
-    if not secrets_path.is_file():
-        raise RuntimeError(f"Secrets file not found: {secrets_path}")
-    text = secrets_path.read_text(encoding="utf-8")
-    hass_url = _parse_simple_yaml_value(text, "hass_url")
-    token = _parse_simple_yaml_value(text, "long_lived_token")
-    if not hass_url or not token:
-        raise RuntimeError("hass_url or long_lived_token missing in secrets")
-    if not hass_url.endswith("/"):
-        hass_url += "/"
+    if credentials is None:
+        if not secrets_path.is_file():
+            raise RuntimeError(f"Secrets file not found: {secrets_path}")
+        text = secrets_path.read_text(encoding="utf-8")
+        hass_url = _parse_simple_yaml_value(text, "hass_url")
+        token = _parse_simple_yaml_value(text, "long_lived_token")
+        if not hass_url or not token:
+            raise RuntimeError("hass_url or long_lived_token missing in secrets")
+        if not hass_url.endswith("/"):
+            hass_url += "/"
+    else:
+        hass_url, token = credentials
     url = f"{hass_url}api/states/{entity_id}"
     req = Request(url, headers={"Authorization": f"Bearer {token}"})
     with urlopen(req, timeout=timeout) as response:
-        return json.loads(response.read().decode("utf-8"))
+        state = json.loads(response.read().decode("utf-8"))
+    if not isinstance(state, dict):
+        raise RuntimeError(
+            "Malformed Home Assistant state response: root must be an object"
+        )
+    if "attributes" in state and not isinstance(state["attributes"], dict):
+        raise RuntimeError(
+            "Malformed Home Assistant state response: attributes must be an object"
+        )
+    return state
+
+
+def read_load_history_credentials(secrets_path: Path) -> tuple[str, str]:
+    if not secrets_path.is_file():
+        raise LoadHistoryError(f"Secrets file not found: {secrets_path}")
+    try:
+        text = secrets_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeError) as exc:
+        raise LoadHistoryError("Could not read Home Assistant secrets") from exc
+    hass_url = _parse_simple_yaml_value(text, "hass_url")
+    token = _parse_simple_yaml_value(text, "long_lived_token")
+    if not hass_url or not token:
+        raise LoadHistoryError("hass_url or long_lived_token missing in secrets")
+    if not hass_url.endswith("/"):
+        hass_url += "/"
+    try:
+        parsed_url = urlsplit(hass_url)
+        _ = parsed_url.port
+    except (ValueError, UnicodeError) as exc:
+        raise LoadHistoryError(
+            "Invalid Home Assistant load-history request configuration"
+        ) from exc
+    if parsed_url.scheme not in ("http", "https") or not parsed_url.netloc:
+        raise LoadHistoryError(
+            "Invalid Home Assistant load-history request configuration"
+        )
+    try:
+        authorization = f"Bearer {token}"
+        authorization.encode("latin-1")
+        if "\r" in authorization or "\n" in authorization:
+            raise ValueError("invalid authorization header")
+        Request(
+            f"{hass_url}api/history/period/1970-01-01T00%3A00%3A00%2B00%3A00",
+            headers={"Authorization": authorization},
+        )
+    except (ValueError, UnicodeError) as exc:
+        raise LoadHistoryError(
+            "Invalid Home Assistant load-history request configuration"
+        ) from exc
+    return hass_url, token
+
+
+def fetch_load_history_from_ha(
+    secrets_path: Path,
+    entity_id: str,
+    *,
+    start: datetime,
+    end: datetime,
+    timeout: float = 15,
+    credentials: tuple[str, str] | None = None,
+) -> list[dict[str, Any]]:
+    if credentials is None:
+        hass_url, token = read_load_history_credentials(secrets_path)
+    else:
+        hass_url, token = credentials
+    try:
+        query = urlencode(
+            {
+                "filter_entity_id": entity_id,
+                "end_time": end.isoformat(),
+                "no_attributes": "true",
+            }
+        )
+        url = (
+            f"{hass_url}api/history/period/{quote(start.isoformat(), safe='')}"
+            f"?{query}"
+        )
+        request = Request(url, headers={"Authorization": f"Bearer {token}"})
+        with urlopen(request, timeout=timeout) as response:
+            raw_body = response.read()
+    except (OSError, HTTPException, ValueError, UnicodeError) as exc:
+        raise LoadHistoryError(
+            f"Home Assistant load-history request failed "
+            f"({type(exc).__name__})"
+        ) from exc
+
+    try:
+        response_text = raw_body.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise LoadHistoryError(
+            "Home Assistant load-history response is not valid UTF-8"
+        ) from exc
+    try:
+        payload = json.loads(response_text)
+    except json.JSONDecodeError as exc:
+        raise LoadHistoryError(
+            "Home Assistant load-history response contains malformed JSON"
+        ) from exc
+
+    if not isinstance(payload, list):
+        raise LoadHistoryError("Malformed Home Assistant load-history response")
+    records: list[dict[str, Any]] = []
+    for entity_history in payload:
+        if not isinstance(entity_history, list):
+            raise LoadHistoryError("Malformed Home Assistant load-history response")
+        for record in entity_history:
+            if not isinstance(record, dict):
+                raise LoadHistoryError(
+                    "Malformed Home Assistant load-history response"
+                )
+            records.append(record)
+    return records
+
+
+def validate_load_history_records(
+    records: list[dict[str, Any]],
+    *,
+    prediction_horizon: int,
+    step_min: int,
+    now: datetime,
+) -> dict[str, Any]:
+    if type(prediction_horizon) is not int or prediction_horizon <= 0:
+        raise LoadHistoryError(
+            "Effective prediction horizon must be a positive integer"
+        )
+    if type(step_min) is not int or step_min != 30:
+        raise LoadHistoryError(
+            "Native load-history validation requires a 30-minute step"
+        )
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise LoadHistoryError(
+            "Load-history validation time must be timezone-aware"
+        )
+
+    local_tz = now.tzinfo
+    now_utc = now.astimezone(timezone.utc)
+    finite_samples_utc: list[datetime] = []
+    for record in records:
+        try:
+            value = float(record.get("state", "nan"))
+        except (TypeError, ValueError):
+            continue
+        if not math.isfinite(value) or value < 0:
+            continue
+
+        raw_timestamp = record.get("last_updated") or record.get("last_changed")
+        if raw_timestamp is None:
+            continue
+        timestamp_text = str(raw_timestamp).strip()
+        try:
+            if timestamp_text.endswith("Z"):
+                timestamp = datetime.fromisoformat(
+                    timestamp_text.replace("Z", "+00:00")
+                )
+            else:
+                timestamp = datetime.fromisoformat(timestamp_text)
+        except ValueError:
+            continue
+        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+            continue
+        timestamp_utc = timestamp.astimezone(timezone.utc)
+        if timestamp_utc > now_utc:
+            continue
+        finite_samples_utc.append(timestamp_utc)
+
+    if not finite_samples_utc:
+        raise LoadHistoryError("Load history has no finite nonnegative samples")
+
+    newest_utc = max(finite_samples_utc)
+    newest_age_min = (now_utc - newest_utc).total_seconds() / 60.0
+    if newest_age_min > 5:
+        raise LoadHistoryError(
+            f"Load history newest finite sample is stale "
+            f"({newest_age_min:.1f} minutes old; maximum 5)"
+        )
+
+    newest_bin_utc = floor_to_step(newest_utc, step_min)
+    first_required_bin_utc = newest_bin_utc - timedelta(
+        minutes=step_min * (prediction_horizon - 1)
+    )
+    covered_bins_utc = {
+        floor_to_step(timestamp_utc, step_min)
+        for timestamp_utc in finite_samples_utc
+        if first_required_bin_utc <= timestamp_utc <= now_utc
+    }
+    required_bins_utc = {
+        first_required_bin_utc + timedelta(minutes=step_min * index)
+        for index in range(prediction_horizon)
+    }
+    missing_bins_utc = sorted(required_bins_utc - covered_bins_utc)
+    if missing_bins_utc:
+        rendered = ", ".join(
+            value.astimezone(local_tz).isoformat()
+            for value in missing_bins_utc[:4]
+        )
+        suffix = "..." if len(missing_bins_utc) > 4 else ""
+        raise LoadHistoryError(
+            f"Load history missing {len(missing_bins_utc)} "
+            f"required 30-minute bin(s): "
+            f"{rendered}{suffix}"
+        )
+
+    return {
+        "required_bins": prediction_horizon,
+        "covered_bins": len(covered_bins_utc & required_bins_utc),
+        "newest_sample_at": newest_utc.astimezone(local_tz).isoformat(),
+        "newest_sample_age_min": round(newest_age_min, 1),
+    }
+
+
+def read_load_history_config(share_dir: Path) -> tuple[str, int]:
+    config_path = share_dir / "config.json"
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        raise LoadHistoryError(
+            f"Invalid EMHASS config {config_path}: {type(exc).__name__}"
+        ) from exc
+    if not isinstance(config, dict):
+        raise LoadHistoryError(
+            f"Invalid EMHASS config {config_path}: root must be an object"
+        )
+
+    entity_id = config.get("sensor_power_load_no_var_loads")
+    if not isinstance(entity_id, str) or not entity_id.strip():
+        raise LoadHistoryError(
+            f"Invalid EMHASS config {config_path}: "
+            "sensor_power_load_no_var_loads must be a non-empty string"
+        )
+    step_min = config.get("optimization_time_step")
+    if type(step_min) is not int or step_min != 30:
+        raise LoadHistoryError(
+            f"Invalid EMHASS config {config_path}: "
+            "optimization_time_step must be 30"
+        )
+    return entity_id.strip(), step_min
+
+
+def validate_native_load_history(
+    secrets_path: Path,
+    share_dir: Path,
+    *,
+    prediction_horizon: int,
+    tz_name: str,
+    now: datetime | None = None,
+    load_history_config: tuple[str, int] | None = None,
+    load_history_credentials: tuple[str, str] | None = None,
+) -> dict[str, Any]:
+    if load_history_config is None:
+        entity_id, step_min = read_load_history_config(share_dir)
+    else:
+        entity_id, step_min = load_history_config
+    checked_at = now or datetime.now(ZoneInfo(tz_name))
+    checked_at_utc = checked_at.astimezone(timezone.utc)
+    current_bin_utc = floor_to_step(checked_at_utc, step_min)
+    start_utc = current_bin_utc - timedelta(
+        minutes=step_min * prediction_horizon
+    )
+    fetch_kwargs: dict[str, Any] = {
+        "start": start_utc,
+        "end": checked_at_utc,
+    }
+    if load_history_credentials is not None:
+        fetch_kwargs["credentials"] = load_history_credentials
+    records = fetch_load_history_from_ha(
+        secrets_path,
+        entity_id,
+        **fetch_kwargs,
+    )
+    summary = validate_load_history_records(
+        records,
+        prediction_horizon=prediction_horizon,
+        step_min=step_min,
+        now=checked_at,
+    )
+    logging.info(
+        "HA load history: %d/%d half-hour bins valid for %s; newest sample %s",
+        summary["covered_bins"],
+        summary["required_bins"],
+        entity_id,
+        summary["newest_sample_at"],
+    )
+    return summary
 
 
 def publish_ha_input_datetime(
@@ -156,19 +444,23 @@ def publish_ha_input_datetime(
     timeout: float = 15,
     max_attempts: int = MPC_STATUS_MAX_ATTEMPTS,
     retry_delay_s: float = MPC_STATUS_RETRY_DELAY_S,
+    credentials: tuple[str, str] | None = None,
 ) -> None:
     """Set a restart-restored HA input_datetime using one idempotent timestamp."""
     if completed_at.tzinfo is None or completed_at.utcoffset() is None:
         raise ValueError("completed_at must be timezone-aware")
-    if not secrets_path.is_file():
-        raise RuntimeError(f"Secrets file not found: {secrets_path}")
-    text = secrets_path.read_text(encoding="utf-8")
-    hass_url = _parse_simple_yaml_value(text, "hass_url")
-    token = _parse_simple_yaml_value(text, "long_lived_token")
-    if not hass_url or not token:
-        raise RuntimeError("hass_url or long_lived_token missing in secrets")
-    if not hass_url.endswith("/"):
-        hass_url += "/"
+    if credentials is None:
+        if not secrets_path.is_file():
+            raise RuntimeError(f"Secrets file not found: {secrets_path}")
+        text = secrets_path.read_text(encoding="utf-8")
+        hass_url = _parse_simple_yaml_value(text, "hass_url")
+        token = _parse_simple_yaml_value(text, "long_lived_token")
+        if not hass_url or not token:
+            raise RuntimeError("hass_url or long_lived_token missing in secrets")
+        if not hass_url.endswith("/"):
+            hass_url += "/"
+    else:
+        hass_url, token = credentials
 
     url = f"{hass_url}api/services/input_datetime/set_datetime"
     body = json.dumps(
@@ -248,13 +540,18 @@ def fetch_prices_from_ha(
     *,
     price_sensor: str,
     tz_name: str,
+    credentials: tuple[str, str] | None = None,
 ) -> dict[str, float]:
     tz = ZoneInfo(tz_name)
     now = datetime.now(tz)
     step_min = read_optimization_time_step_min(share_dir)
     slot_start = floor_to_step(now, step_min)
 
-    state = fetch_ha_state(secrets_path, price_sensor)
+    state = fetch_ha_state(
+        secrets_path,
+        price_sensor,
+        credentials=credentials,
+    )
     entity_state = str(state.get("state", "")).strip().lower()
     if entity_state in ("unavailable", "unknown", ""):
         raise RuntimeError(
@@ -294,10 +591,15 @@ def price_fetch_summary(
     price_sensor: str,
     tz_name: str,
     export_haircut: float,
+    credentials: tuple[str, str] | None = None,
 ) -> dict[str, Any]:
     """Dry-run helper: fetch and expand without writing CSVs."""
     tz = ZoneInfo(tz_name)
-    state = fetch_ha_state(secrets_path, price_sensor)
+    state = fetch_ha_state(
+        secrets_path,
+        price_sensor,
+        credentials=credentials,
+    )
     last_updated = state.get("last_updated")
     age_min: float | None = None
     if last_updated:
@@ -312,6 +614,7 @@ def price_fetch_summary(
         share_dir,
         price_sensor=price_sensor,
         tz_name=tz_name,
+        credentials=credentials,
     )
     keys = sorted(prices.keys())
     n = len(prices)
@@ -336,12 +639,14 @@ def refresh_price_csvs_from_ha(
     price_sensor: str,
     tz_name: str,
     export_haircut: float,
+    credentials: tuple[str, str] | None = None,
 ) -> tuple[dict[str, float], dict[str, float], Path, Path]:
     prices = fetch_prices_from_ha(
         secrets_path,
         share_dir,
         price_sensor=price_sensor,
         tz_name=tz_name,
+        credentials=credentials,
     )
     prod_prices = apply_export_haircut(prices, export_haircut)
     load_csv, prod_csv = write_price_csvs(
@@ -462,13 +767,27 @@ def fetch_soc_init(
     secrets_path: Path,
     sensor: str,
     timeout: float = 15,
+    *,
+    credentials: tuple[str, str] | None = None,
 ) -> float | None:
     try:
-        state = fetch_ha_state(secrets_path, sensor, timeout=timeout)
+        state = fetch_ha_state(
+            secrets_path,
+            sensor,
+            timeout=timeout,
+            credentials=credentials,
+        )
         soc_pct = float(state.get("state", "nan"))
         if 0 <= soc_pct <= 100:
             return round(soc_pct / 100.0, 4)
-    except (HTTPError, URLError, ValueError, TypeError, RuntimeError) as exc:
+    except (
+        OSError,
+        HTTPException,
+        UnicodeError,
+        ValueError,
+        TypeError,
+        RuntimeError,
+    ) as exc:
         logging.warning("Could not read SOC from HA (%s): %s", sensor, exc)
     return None
 
@@ -477,30 +796,29 @@ def fetch_soc_limit(
     secrets_path: Path,
     sensor: str,
     timeout: float = 15,
+    *,
+    credentials: tuple[str, str] | None = None,
 ) -> float | None:
     try:
-        state = fetch_ha_state(secrets_path, sensor, timeout=timeout)
+        state = fetch_ha_state(
+            secrets_path,
+            sensor,
+            timeout=timeout,
+            credentials=credentials,
+        )
         val_pct = float(state.get("state", "nan"))
         if 0 <= val_pct <= 100:
             return round(val_pct / 100.0, 4)
-    except (HTTPError, URLError, ValueError, TypeError, RuntimeError) as exc:
+    except (
+        OSError,
+        HTTPException,
+        UnicodeError,
+        ValueError,
+        TypeError,
+        RuntimeError,
+    ) as exc:
         logging.warning("Could not read SOC limit from HA (%s): %s", sensor, exc)
     return None
-
-
-def fetch_current_load(
-    secrets_path: Path,
-    sensor: str,
-    timeout: float = 15,
-) -> float:
-    try:
-        state = fetch_ha_state(secrets_path, sensor, timeout=timeout)
-        load_w = float(state.get("state", "nan"))
-        if not math.isnan(load_w):
-            return round(load_w, 2)
-    except (HTTPError, URLError, ValueError, TypeError, RuntimeError) as exc:
-        logging.warning("Could not read current load from HA (%s): %s", sensor, exc)
-    return LOAD_FORECAST_CONSTANT_W
 
 
 def call_emhass_action(
@@ -670,18 +988,9 @@ def resolve_prediction_horizon(share_dir: Path, available_slots: int) -> int:
     return effective
 
 
-def build_load_power_forecast(prediction_horizon: int, first_slot_load: float) -> list[float]:
-    if type(prediction_horizon) is not int or prediction_horizon <= 0:
-        raise ValueError("prediction_horizon must be a positive integer")
-    forecast = [LOAD_FORECAST_CONSTANT_W] * prediction_horizon
-    forecast[0] = first_slot_load
-    return forecast
-
-
 def build_naive_mpc_payload(
     *,
     prediction_horizon: int,
-    first_slot_load: float,
     soc_init: float | None,
     soc_final: float | None,
     soc_min: float | None = None,
@@ -690,9 +999,6 @@ def build_naive_mpc_payload(
     payload: dict[str, Any] = {
         "weather_forecast_cache_only": True,
         "prediction_horizon": prediction_horizon,
-        "load_power_forecast": build_load_power_forecast(prediction_horizon, first_slot_load),
-        "alpha": LOAD_FORECAST_MIX_ALPHA,
-        "beta": LOAD_FORECAST_MIX_BETA,
     }
     if soc_init is not None:
         payload["soc_init"] = soc_init
@@ -744,7 +1050,6 @@ def ensure_weather_forecast_cache(
 def run_mpc_chain(
     base_url: str,
     *,
-    first_slot_load: float,
     soc_init: float | None,
     soc_final: float | None,
     soc_min: float | None = None,
@@ -766,17 +1071,13 @@ def run_mpc_chain(
 
     mpc_payload = build_naive_mpc_payload(
         prediction_horizon=prediction_horizon,
-        first_slot_load=first_slot_load,
         soc_init=soc_init,
         soc_final=soc_final,
         soc_min=soc_min,
         soc_max=soc_max,
     )
 
-    logging.info(
-        "MPC: naive-mpc-optim (CSV prices, cache-only weather, load=%s)",
-        LOAD_FORECAST_MODE,
-    )
+    logging.info("MPC: naive-mpc-optim (CSV prices, cache-only weather, native naive load)")
     call_emhass_action(base_url, "naive-mpc-optim", mpc_payload, timeout=optim_timeout)
     logging.info("MPC: publish-data to Home Assistant")
     call_emhass_action(base_url, "publish-data", {}, timeout=publish_timeout)
@@ -788,12 +1089,17 @@ def finalize_successful_mpc_run(
     completed_at: datetime,
     *,
     prediction_horizon: int,
+    credentials: tuple[str, str] | None = None,
 ) -> bool:
+    publish_kwargs: dict[str, Any] = {}
+    if credentials is not None:
+        publish_kwargs["credentials"] = credentials
     try:
         publish_ha_input_datetime(
             secrets_path,
             MPC_SUCCESS_ENTITY_ID,
             completed_at,
+            **publish_kwargs,
         )
     except RuntimeError as exc:
         error = f"HA successful-MPC marker failed: {exc}"
@@ -813,8 +1119,6 @@ def finalize_successful_mpc_run(
         ok=True,
         metadata={
             "prediction_horizon": prediction_horizon,
-            "load_forecast_mode": LOAD_FORECAST_MODE,
-            "load_forecast_constant_w": LOAD_FORECAST_CONSTANT_W,
             "plan_generated_at": completed_at.isoformat(),
         },
     )
@@ -826,6 +1130,18 @@ def _abort_mpc_prices(share_dir: Path, error: str) -> int:
     write_run_status(share_dir, "prices", ok=False, error=error)
     write_run_status(share_dir, "mpc", ok=False, error=f"price fetch failed: {error}")
     logging.error("MPC aborted: %s", error)
+    return 1
+
+
+def _abort_mpc_load_history(share_dir: Path, error: str) -> int:
+    write_run_status(
+        share_dir,
+        "mpc",
+        ok=False,
+        error=f"load history validation failed: {error}",
+        failure_kind="load_history",
+    )
+    logging.error("MPC aborted: load history validation failed: %s", error)
     return 1
 
 
@@ -885,11 +1201,6 @@ def main() -> int:
         help="HA sensor for maximum battery SOC (percent, 0-100)",
     )
     parser.add_argument(
-        "--load-sensor",
-        default=os.environ.get("EMHASS_LOAD_SENSOR", "sensor.electricity_meter_power_consumption"),
-        help="HA house load sensor (Watts)",
-    )
-    parser.add_argument(
         "--no-soc",
         action="store_true",
         help="Do not pass soc_init to EMHASS",
@@ -944,6 +1255,16 @@ def main() -> int:
         level=logging.DEBUG if args.verbose else logging.INFO,
         format="%(levelname)s: %(message)s",
     )
+
+    load_history_config: tuple[str, int] | None = None
+    load_history_credentials: tuple[str, str] | None = None
+    if args.action == "mpc" and not args.write_only and not args.soc_refresh:
+        try:
+            load_history_config = read_load_history_config(args.share_dir)
+            load_history_credentials = read_load_history_credentials(args.secrets)
+        except LoadHistoryError as exc:
+            return _abort_mpc_load_history(args.share_dir, str(exc))
+
     if config_err := validate_cache_max_age_config(args.share_dir):
         logging.error("Invalid EMHASS weather cache config: %s", config_err)
 
@@ -1041,17 +1362,32 @@ def main() -> int:
         return 0
 
     if args.action == "mpc":
-        soc_init = None if args.no_soc else fetch_soc_init(args.secrets, args.soc_sensor)
-        soc_min = fetch_soc_limit(args.secrets, args.soc_min_sensor)
-        soc_max = fetch_soc_limit(args.secrets, args.soc_max_sensor)
+        assert load_history_credentials is not None
+        soc_init = (
+            None
+            if args.no_soc
+            else fetch_soc_init(
+                args.secrets,
+                args.soc_sensor,
+                credentials=load_history_credentials,
+            )
+        )
+        soc_min = fetch_soc_limit(
+            args.secrets,
+            args.soc_min_sensor,
+            credentials=load_history_credentials,
+        )
+        soc_max = fetch_soc_limit(
+            args.secrets,
+            args.soc_max_sensor,
+            credentials=load_history_credentials,
+        )
         soc_final = resolve_soc_final(
             omit=args.omit_soc_final,
             cli_override=args.soc_final,
             soc_min=soc_min,
             share_dir=args.share_dir,
         )
-        first_slot_load = fetch_current_load(args.secrets, args.load_sensor)
-
         try:
             price_summary = price_fetch_summary(
                 args.secrets,
@@ -1059,8 +1395,16 @@ def main() -> int:
                 price_sensor=args.price_sensor,
                 tz_name=args.timezone,
                 export_haircut=args.export_price_haircut,
+                credentials=load_history_credentials,
             )
-        except (HTTPError, URLError, RuntimeError) as exc:
+        except (
+            OSError,
+            HTTPException,
+            UnicodeError,
+            ValueError,
+            TypeError,
+            RuntimeError,
+        ) as exc:
             return _abort_mpc_prices(args.share_dir, str(exc))
 
         prediction_horizon = price_summary["prediction_horizon_effective"]
@@ -1080,9 +1424,6 @@ def main() -> int:
                         "soc_min": soc_min,
                         "soc_max": soc_max,
                         "prediction_horizon": prediction_horizon,
-                        "first_slot_load": first_slot_load,
-                        "load_forecast_mode": LOAD_FORECAST_MODE,
-                        "load_forecast_constant_w": LOAD_FORECAST_CONSTANT_W,
                         "weather_cache_stale": stale,
                         **price_summary,
                         "chain": [
@@ -1104,19 +1445,39 @@ def main() -> int:
                 price_sensor=args.price_sensor,
                 tz_name=args.timezone,
                 export_haircut=args.export_price_haircut,
+                credentials=load_history_credentials,
             )
             prediction_horizon = resolve_prediction_horizon(
                 args.share_dir, len(prices)
             )
-        except (HTTPError, URLError, RuntimeError) as exc:
+        except (
+            OSError,
+            HTTPException,
+            UnicodeError,
+            ValueError,
+            TypeError,
+            RuntimeError,
+        ) as exc:
             return _abort_mpc_prices(args.share_dir, str(exc))
 
         write_run_status(args.share_dir, "prices", ok=True)
 
+        assert load_history_config is not None
+        try:
+            validate_native_load_history(
+                args.secrets,
+                args.share_dir,
+                prediction_horizon=prediction_horizon,
+                tz_name=args.timezone,
+                load_history_config=load_history_config,
+                load_history_credentials=load_history_credentials,
+            )
+        except LoadHistoryError as exc:
+            return _abort_mpc_load_history(args.share_dir, str(exc))
+
         try:
             run_mpc_chain(
                 args.emhass_base,
-                first_slot_load=first_slot_load,
                 soc_init=soc_init,
                 soc_final=soc_final,
                 soc_min=soc_min,
@@ -1139,6 +1500,7 @@ def main() -> int:
             args.share_dir,
             completed_at,
             prediction_horizon=prediction_horizon,
+            credentials=load_history_credentials,
         )
         return 0 if finalized else 1
 
