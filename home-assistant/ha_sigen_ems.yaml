@@ -612,7 +612,6 @@ automation:
         to:
           - "Command Discharging (Output power from PV first)"
           - "Command Discharging (Output power from the battery first)"
-          - "Maximum Self-consumption (Default)"
     condition:
       - condition: template
         value_template: >-
@@ -623,8 +622,7 @@ automation:
         value_template: >-
           {{ states('select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode')
              in ['Command Discharging (Output power from PV first)',
-                 'Command Discharging (Output power from the battery first)',
-                 'Maximum Self-consumption (Default)'] }}
+                 'Command Discharging (Output power from the battery first)'] }}
     action:
       - service: script.turn_off
         target:
@@ -644,6 +642,19 @@ automation:
           message: >-
             SOC {{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') }}% hit floor
             ({{ states('input_number.emhass_soc_min') }}%). Discharge stopped.
+      - if:
+          - condition: template
+            value_template: >-
+              {% set p = states('sensor.p_batt_forecast') | float(none) %}
+              {% set threshold = states('input_number.emhass_power_threshold_w') | float(500) %}
+              {{ p is not none
+                 and p >= (0 - threshold)
+                 and p <= threshold }}
+          - condition: state
+            entity_id: input_boolean.emhass_recovery_active
+            state: "off"
+        then:
+          - service: script.sigen_restore_native_control
 
   # --- Recovery charging (Layer 3) ---
 

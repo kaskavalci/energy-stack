@@ -203,7 +203,7 @@ class SigenIdleSelfConsumptionTests(unittest.TestCase):
             "emhass_soc_floor_cutout", "emhass_recovery_start"
         )
 
-    def test_floor_cutout_covers_native_mode(self) -> None:
+    def test_floor_cutout_excludes_native_mode(self) -> None:
         floor = self.floor_cutout()
         trigger = floor.split("    trigger:\n", 1)[1].split(
             "    condition:\n", 1
@@ -212,8 +212,32 @@ class SigenIdleSelfConsumptionTests(unittest.TestCase):
             "    action:\n", 1
         )[0]
         native_mode = "Maximum Self-consumption (Default)"
-        self.assertIn(native_mode, trigger)
-        self.assertIn(native_mode, condition)
+        discharge_modes = [
+            "Command Discharging (Output power from PV first)",
+            "Command Discharging (Output power from the battery first)",
+        ]
+        self.assertNotIn(native_mode, trigger)
+        self.assertNotIn(native_mode, condition)
+        for discharge_mode in discharge_modes:
+            self.assertIn(discharge_mode, trigger)
+            self.assertIn(discharge_mode, condition)
+
+    def test_floor_cutout_restores_concurrent_idle_after_hard_stop(self) -> None:
+        action = self.floor_cutout().split("    action:\n", 1)[1]
+        reconcile = action.split("      - if:\n", 1)[1]
+        self.assertIn("p >= (0 - threshold)", action)
+        self.assertIn("p <= threshold", action)
+        self.assertIn("entity_id: input_boolean.emhass_recovery_active", reconcile)
+        self.assertIn('state: "off"', reconcile)
+        self.assertIn("service: script.sigen_restore_native_control", action)
+        self.assertLess(
+            action.index("service: script.sigen_apply_idle_limits"),
+            action.index("service: script.sigen_restore_native_control"),
+        )
+        self.assertLess(
+            action.index("service: logbook.log"),
+            action.index("service: script.sigen_restore_native_control"),
+        )
 
     def test_floor_cutout_is_inclusive_and_keeps_hard_stop(self) -> None:
         floor = self.floor_cutout()
