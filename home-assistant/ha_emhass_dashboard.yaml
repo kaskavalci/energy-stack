@@ -121,6 +121,48 @@ template:
             {% endif %}
           {% endif %}
 
+      - name: EMHASS net electricity profit today
+        unique_id: emhass_net_electricity_profit_today
+        default_entity_id: sensor.emhass_net_electricity_profit_today
+        unit_of_measurement: EUR
+        device_class: monetary
+        state_class: measurement
+        icon: mdi:cash-plus
+        state: >
+          {% set production = states('sensor.zonneplan_electricity_production_costs_today') | float(none) %}
+          {% set delivery = states('sensor.zonneplan_electricity_delivery_costs_today') | float(none) %}
+          {% if production is none or delivery is none %}
+            unknown
+          {% else %}
+            {{ (production - delivery) | round(2) }}
+          {% endif %}
+        attributes:
+          production: >
+            {{ states('sensor.zonneplan_electricity_production_costs_today') | float(none) }}
+          delivery: >
+            {{ states('sensor.zonneplan_electricity_delivery_costs_today') | float(none) }}
+
+      - name: EMHASS net electricity profit month
+        unique_id: emhass_net_electricity_profit_month
+        default_entity_id: sensor.emhass_net_electricity_profit_month
+        unit_of_measurement: EUR
+        device_class: monetary
+        state_class: measurement
+        icon: mdi:cash-plus
+        state: >
+          {% set production = states('sensor.zonneplan_electricity_production_costs_this_month') | float(none) %}
+          {% set delivery = states('sensor.zonneplan_electricity_delivery_costs_this_month') | float(none) %}
+          {% if production is none or delivery is none %}
+            unknown
+          {% else %}
+            {{ (production - delivery) | round(2) }}
+          {% endif %}
+        attributes:
+          production: >
+            {{ states('sensor.zonneplan_electricity_production_costs_this_month') | float(none) }}
+          delivery: >
+            {{ states('sensor.zonneplan_electricity_delivery_costs_this_month') | float(none) }}
+
       - name: EMHASS recovery target SOC
         unique_id: emhass_recovery_target_soc
         default_entity_id: sensor.emhass_recovery_target_soc

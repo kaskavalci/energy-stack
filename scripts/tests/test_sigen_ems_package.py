@@ -148,6 +148,53 @@ class EmhassPlanValidityPresentationTests(unittest.TestCase):
         )
 
 
+class EmhassNetElectricityProfitTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.dashboard = DASHBOARD_PACKAGE_PATH.read_text(encoding="utf-8")
+
+    def _sensor_block(self, name: str, next_name: str) -> str:
+        return self.dashboard.split(f"      - name: {name}\n", 1)[1].split(
+            f"      - name: {next_name}\n", 1
+        )[0]
+
+    def test_today_profit_is_production_minus_delivery(self) -> None:
+        today = self._sensor_block(
+            "EMHASS net electricity profit today",
+            "EMHASS net electricity profit month",
+        )
+        self.assertIn("default_entity_id: sensor.emhass_net_electricity_profit_today", today)
+        self.assertIn("unit_of_measurement: EUR", today)
+        self.assertIn("device_class: monetary", today)
+        self.assertIn("state_class: measurement", today)
+        self.assertIn(
+            "sensor.zonneplan_electricity_production_costs_today", today
+        )
+        self.assertIn(
+            "sensor.zonneplan_electricity_delivery_costs_today", today
+        )
+        self.assertIn("production - delivery", today)
+        self.assertIn("unknown", today)
+        self.assertNotIn("excl_tax", today)
+        self.assertIn("production:", today)
+        self.assertIn("delivery:", today)
+
+    def test_month_profit_is_production_minus_delivery(self) -> None:
+        month = self._sensor_block(
+            "EMHASS net electricity profit month",
+            "EMHASS recovery target SOC",
+        )
+        self.assertIn("default_entity_id: sensor.emhass_net_electricity_profit_month", month)
+        self.assertIn(
+            "sensor.zonneplan_electricity_production_costs_this_month", month
+        )
+        self.assertIn(
+            "sensor.zonneplan_electricity_delivery_costs_this_month", month
+        )
+        self.assertIn("production - delivery", month)
+        self.assertIn("unknown", month)
+        self.assertNotIn("excl_tax", month)
+
+
 class EmhassMpcFreshnessContractTests(unittest.TestCase):
     def setUp(self) -> None:
         self.dashboard = DASHBOARD_PACKAGE_PATH.read_text(encoding="utf-8")
