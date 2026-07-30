@@ -35,24 +35,18 @@ prediction horizon. The query includes one extra preceding half-hour. After
 the newest finite sample passes the five-minute freshness limit, its floored
 UTC bin anchors the required consecutive bins. This lets a run at exactly
 `:00` or `:30` use the last completed bin until the first sample in the new bin
-arrives; once that sample exists, the window advances. Every required bin must
-contain a finite, non-negative sample. A genuine `0 W` sample is valid; keep
-`set_zero_min: false` so EMHASS does not replace it. Query bounds, freshness,
-flooring, and bin coverage are calculated as real UTC instants; local time is
-used only in diagnostics. This preserves both repeated half-hours during the
-autumn clock change and does not invent nonexistent half-hours during the
-spring change. HA timestamps must include a UTC offset.
+arrives; once that sample exists, the window advances.
 
-Load-history failure is fail-closed: malformed config, an HA history error,
-unavailable/invalid samples, a missing bin, or stale history records
-`mpc.ok=false` with `failure_kind=load_history` before any EMHASS action. The
-run does not optimize, publish, or advance
-`input_datetime.emhass_last_successful_mpc`; HA's 40-minute freshness gate
-restores Sigenergy native control. Validation never constructs or submits a
-replacement load forecast, and there is no retry, interpolation, cache,
-profile, or constant-load fallback. Expected config, filesystem, request,
-protocol, decoding, JSON, and response-shape failures in the history gate are
-normalized without masking unexpected programming errors. Normal MPC strictly
+Load history is classified into three runtime modes:
+- `healthy`: all required half-hour bins are covered;
+- `degraded`: exactly one fully bracketed interior gap contains at most six consecutive bins (3 hours) and the newest sample is fresh (<=5 min);
+- `unsafe`: longer, multiple, edge, unbracketed, stale, or malformed history.
+
+Both healthy and degraded runs use the native `naive-mpc-optim` payload without explicit load forecast, `alpha`, or `beta`. EMHASS performs its configured in-memory linear interpolation over bounded degraded gaps. Genuine `0 W` samples are valid; keep `set_zero_min: false` so EMHASS does not replace them. Query bounds, freshness, flooring, and bin coverage are calculated as real UTC instants; local time is used only in diagnostics. HA timestamps must include a UTC offset.
+
+Unsafe load-history failure is fail-closed: malformed config, an HA history error, invalid samples, unbracketed or excessive missing bins, or stale history records `mpc.ok=false` with `failure_kind=load_history` before any EMHASS action. The run does not optimize, publish, or advance `input_datetime.emhass_last_successful_mpc`; HA's 40-minute freshness gate restores Sigenergy native control. Cron never constructs or submits a replacement load forecast list or synthetic HA recorder state. Expected config, filesystem, request, protocol, decoding, JSON, and response-shape failures in the history gate are normalized without masking unexpected programming errors.
+
+EMHASS image upgrades must satisfy this native interpolation contract before updating image pins in `docker-compose.yml`. See [docs/EMHASS_UPGRADES.md](../docs/EMHASS_UPGRADES.md) for pin requirements and verification procedures. Normal MPC strictly
 reads the HA credential file once before any HA request and reuses that
 immutable URL/token snapshot for SOC, prices, history, and the successful-MPC
 marker. The local preflight does not probe HA; subsequent endpoint failures

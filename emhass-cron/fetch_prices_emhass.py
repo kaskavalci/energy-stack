@@ -89,8 +89,23 @@ MPC_STATUS_MAX_ATTEMPTS = 3
 MPC_STATUS_RETRY_DELAY_S = 2.0
 
 
+MAX_DEGRADED_LOAD_GAP_BINS = 6
+LOAD_HISTORY_MODE_HEALTHY = "healthy"
+LOAD_HISTORY_MODE_DEGRADED = "degraded"
+LOAD_HISTORY_MODE_UNSAFE = "unsafe"
+
+
 class LoadHistoryError(RuntimeError):
     """Expected load-history config, retrieval, or validation failure."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        summary: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.summary = summary
 
 
 def _parse_simple_yaml_value(text: str, key: str) -> str | None:
@@ -321,11 +336,6 @@ def validate_load_history_records(
 
     newest_utc = max(finite_samples_utc)
     newest_age_min = (now_utc - newest_utc).total_seconds() / 60.0
-    if newest_age_min > 5:
-        raise LoadHistoryError(
-            f"Load history newest finite sample is stale "
-            f"({newest_age_min:.1f} minutes old; maximum 5)"
-        )
 
     newest_bin_utc = floor_to_step(newest_utc, step_min)
     first_required_bin_utc = newest_bin_utc - timedelta(
@@ -336,29 +346,86 @@ def validate_load_history_records(
         for timestamp_utc in finite_samples_utc
         if first_required_bin_utc <= timestamp_utc <= now_utc
     }
-    required_bins_utc = {
+    required_bins_utc = [
         first_required_bin_utc + timedelta(minutes=step_min * index)
         for index in range(prediction_horizon)
-    }
-    missing_bins_utc = sorted(required_bins_utc - covered_bins_utc)
-    if missing_bins_utc:
-        rendered = ", ".join(
-            value.astimezone(local_tz).isoformat()
-            for value in missing_bins_utc[:4]
-        )
-        suffix = "..." if len(missing_bins_utc) > 4 else ""
-        raise LoadHistoryError(
-            f"Load history missing {len(missing_bins_utc)} "
-            f"required 30-minute bin(s): "
-            f"{rendered}{suffix}"
-        )
-
-    return {
+    ]
+    required_set_utc = set(required_bins_utc)
+    missing_bins_utc = sorted(required_set_utc - covered_bins_utc)
+    summary: dict[str, Any] = {
+        "mode": LOAD_HISTORY_MODE_HEALTHY,
         "required_bins": prediction_horizon,
-        "covered_bins": len(covered_bins_utc & required_bins_utc),
-        "newest_sample_at": newest_utc.astimezone(local_tz).isoformat(),
-        "newest_sample_age_min": round(newest_age_min, 1),
+        "covered_bins": len(covered_bins_utc & required_set_utc),
+        "missing_bin_count": len(missing_bins_utc),
+        "missing_bins": [value.isoformat() for value in missing_bins_utc],
+        "interpolation_method": None,
+        "newest_sample_at": newest_utc.isoformat(),
+        "newest_sample_age_minutes": round(newest_age_min, 1),
     }
+    if newest_age_min > 5:
+        summary["mode"] = LOAD_HISTORY_MODE_UNSAFE
+        raise LoadHistoryError(
+            f"Load history newest finite sample is stale "
+            f"({newest_age_min:.1f} minutes old; maximum 5)",
+            summary=summary,
+        )
+    if not missing_bins_utc:
+        return summary
+
+    index_by_bin = {
+        value: index for index, value in enumerate(required_bins_utc)
+    }
+    missing_indices = [index_by_bin[value] for value in missing_bins_utc]
+    is_consecutive = all(
+        right == left + 1
+        for left, right in zip(missing_indices, missing_indices[1:])
+    )
+    has_brackets = (
+        missing_indices[0] > 0
+        and missing_indices[-1] < prediction_horizon - 1
+    )
+    is_bounded = (
+        1 <= len(missing_indices) <= MAX_DEGRADED_LOAD_GAP_BINS
+    )
+
+    if is_consecutive and has_brackets and is_bounded:
+        gap_start = missing_bins_utc[0]
+        gap_end_exclusive = missing_bins_utc[-1] + timedelta(minutes=step_min)
+        summary.update(
+            {
+                "mode": LOAD_HISTORY_MODE_DEGRADED,
+                "gap_start": gap_start.isoformat(),
+                "gap_end_exclusive": gap_end_exclusive.isoformat(),
+                "gap_duration_minutes": int(
+                    (gap_end_exclusive - gap_start).total_seconds() / 60
+                ),
+                "interpolation_method": "emhass_native_linear",
+            }
+        )
+        return summary
+
+    summary["mode"] = LOAD_HISTORY_MODE_UNSAFE
+    rendered = ", ".join(
+        value.astimezone(local_tz).isoformat()
+        for value in missing_bins_utc[:4]
+    )
+    suffix = "..." if len(missing_bins_utc) > 4 else ""
+    reason = (
+        "gap is not one consecutive sequence"
+        if not is_consecutive
+        else "gap is not bracketed inside the required window"
+        if not has_brackets
+        else (
+            f"gap exceeds {MAX_DEGRADED_LOAD_GAP_BINS} "
+            "30-minute bins"
+        )
+    )
+    raise LoadHistoryError(
+        f"Load history unsafe: {reason}; missing "
+        f"{len(missing_bins_utc)} required 30-minute bin(s): "
+        f"{rendered}{suffix}",
+        summary=summary,
+    )
 
 
 def read_load_history_config(share_dir: Path) -> tuple[str, int]:
@@ -427,7 +494,8 @@ def validate_native_load_history(
         now=checked_at,
     )
     logging.info(
-        "HA load history: %d/%d half-hour bins valid for %s; newest sample %s",
+        "HA load history (%s): %d/%d half-hour bins valid for %s; newest sample %s",
+        summary["mode"],
         summary["covered_bins"],
         summary["required_bins"],
         entity_id,
@@ -1089,6 +1157,7 @@ def finalize_successful_mpc_run(
     completed_at: datetime,
     *,
     prediction_horizon: int,
+    load_history: dict[str, Any],
     credentials: tuple[str, str] | None = None,
 ) -> bool:
     publish_kwargs: dict[str, Any] = {}
@@ -1110,6 +1179,7 @@ def finalize_successful_mpc_run(
             ok=False,
             error=error,
             failure_kind="status_publish",
+            metadata={"load_history": load_history},
         )
         return False
 
@@ -1120,6 +1190,7 @@ def finalize_successful_mpc_run(
         metadata={
             "prediction_horizon": prediction_horizon,
             "plan_generated_at": completed_at.isoformat(),
+            "load_history": load_history,
         },
     )
     write_run_status(share_dir, "weather", ok=True)
@@ -1133,16 +1204,86 @@ def _abort_mpc_prices(share_dir: Path, error: str) -> int:
     return 1
 
 
-def _abort_mpc_load_history(share_dir: Path, error: str) -> int:
+def _abort_mpc_load_history(
+    share_dir: Path,
+    error: str,
+    *,
+    summary: dict[str, Any] | None = None,
+    prediction_horizon: int = DEFAULT_PREDICTION_HORIZON,
+) -> int:
+    if summary is None:
+        summary = {
+            "mode": LOAD_HISTORY_MODE_UNSAFE,
+            "required_bins": prediction_horizon,
+            "covered_bins": 0,
+            "missing_bin_count": prediction_horizon,
+            "missing_bins": [],
+            "interpolation_method": None,
+            "newest_sample_at": None,
+            "newest_sample_age_minutes": None,
+        }
     write_run_status(
         share_dir,
         "mpc",
         ok=False,
         error=f"load history validation failed: {error}",
         failure_kind="load_history",
+        metadata={"load_history": summary},
     )
     logging.error("MPC aborted: load history validation failed: %s", error)
     return 1
+
+
+LOAD_INTERPOLATION_FAILURE_KEYWORDS = (
+    "get_load_forecast",
+    "p_load_forecast",
+    "get_mix_forecast",
+    "load forecast",
+)
+
+
+def mpc_error_is_load_interpolation_related(error: str) -> bool:
+    lowered = error.lower()
+    return any(
+        keyword in lowered
+        for keyword in LOAD_INTERPOLATION_FAILURE_KEYWORDS
+    )
+
+
+def write_mpc_chain_failure(
+    share_dir: Path,
+    error: str,
+    *,
+    load_history: dict[str, Any],
+) -> None:
+    is_weather = mpc_error_is_weather_related(error)
+    is_interpolation = (
+        load_history.get("mode") == LOAD_HISTORY_MODE_DEGRADED
+        and mpc_error_is_load_interpolation_related(error)
+    )
+    failure_kind = (
+        "weather"
+        if is_weather
+        else "load_interpolation"
+        if is_interpolation
+        else None
+    )
+    write_run_status(
+        share_dir,
+        "mpc",
+        ok=False,
+        error=error,
+        failure_kind=failure_kind,
+        metadata={"load_history": load_history},
+    )
+    if is_weather:
+        write_run_status(
+            share_dir,
+            "weather",
+            ok=False,
+            error=error,
+            failure_kind="weather",
+        )
 
 
 def main() -> int:
@@ -1263,7 +1404,31 @@ def main() -> int:
             load_history_config = read_load_history_config(args.share_dir)
             load_history_credentials = read_load_history_credentials(args.secrets)
         except LoadHistoryError as exc:
-            return _abort_mpc_load_history(args.share_dir, str(exc))
+            if args.dry_run:
+                print(
+                    json.dumps(
+                        {
+                            "action": "mpc",
+                            "error": f"load history config preflight failed: {exc}",
+                            "load_history": {
+                                "mode": LOAD_HISTORY_MODE_UNSAFE,
+                                "required_bins": DEFAULT_PREDICTION_HORIZON,
+                                "covered_bins": 0,
+                                "missing_bin_count": DEFAULT_PREDICTION_HORIZON,
+                                "missing_bins": [],
+                                "interpolation_method": None,
+                                "newest_sample_at": None,
+                                "newest_sample_age_minutes": None,
+                                "error": str(exc),
+                            },
+                        },
+                        indent=2,
+                    )
+                )
+                return 1
+            return _abort_mpc_load_history(
+                args.share_dir, str(exc), summary=exc.summary
+            )
 
     if config_err := validate_cache_max_age_config(args.share_dir):
         logging.error("Invalid EMHASS weather cache config: %s", config_err)
@@ -1405,11 +1570,54 @@ def main() -> int:
             TypeError,
             RuntimeError,
         ) as exc:
+            if args.dry_run:
+                print(
+                    json.dumps(
+                        {
+                            "action": "mpc",
+                            "error": f"price fetch failed: {exc}",
+                            "load_history": {
+                                "mode": LOAD_HISTORY_MODE_UNSAFE,
+                                "required_bins": DEFAULT_PREDICTION_HORIZON,
+                                "covered_bins": 0,
+                                "missing_bin_count": DEFAULT_PREDICTION_HORIZON,
+                                "missing_bins": [],
+                                "interpolation_method": None,
+                                "newest_sample_at": None,
+                                "newest_sample_age_minutes": None,
+                            },
+                        },
+                        indent=2,
+                    )
+                )
+                return 1
             return _abort_mpc_prices(args.share_dir, str(exc))
 
         prediction_horizon = price_summary["prediction_horizon_effective"]
 
         if args.dry_run:
+            assert load_history_config is not None
+            try:
+                load_history_summary = validate_native_load_history(
+                    args.secrets,
+                    args.share_dir,
+                    prediction_horizon=prediction_horizon,
+                    tz_name=args.timezone,
+                    load_history_config=load_history_config,
+                    load_history_credentials=load_history_credentials,
+                )
+            except LoadHistoryError as exc:
+                load_history_summary = exc.summary or {
+                    "mode": LOAD_HISTORY_MODE_UNSAFE,
+                    "required_bins": prediction_horizon,
+                    "covered_bins": 0,
+                    "missing_bin_count": prediction_horizon,
+                    "missing_bins": [],
+                    "interpolation_method": None,
+                    "newest_sample_at": None,
+                    "newest_sample_age_minutes": None,
+                    "error": str(exc),
+                }
             stale = weather_cache_stale_reason(
                 args.share_dir,
                 prediction_horizon,
@@ -1425,6 +1633,7 @@ def main() -> int:
                         "soc_max": soc_max,
                         "prediction_horizon": prediction_horizon,
                         "weather_cache_stale": stale,
+                        "load_history": load_history_summary,
                         **price_summary,
                         "chain": [
                             "ha-prices",
@@ -1464,7 +1673,7 @@ def main() -> int:
 
         assert load_history_config is not None
         try:
-            validate_native_load_history(
+            load_history_summary = validate_native_load_history(
                 args.secrets,
                 args.share_dir,
                 prediction_horizon=prediction_horizon,
@@ -1473,7 +1682,9 @@ def main() -> int:
                 load_history_credentials=load_history_credentials,
             )
         except LoadHistoryError as exc:
-            return _abort_mpc_load_history(args.share_dir, str(exc))
+            return _abort_mpc_load_history(
+                args.share_dir, str(exc), summary=exc.summary
+            )
 
         try:
             run_mpc_chain(
@@ -1488,10 +1699,14 @@ def main() -> int:
             )
         except HTTPError as exc:
             err = f"HTTP {exc.code}: {exc.read().decode()[:300]}"
-            write_mpc_weather_failures(args.share_dir, err)
+            write_mpc_chain_failure(
+                args.share_dir, err, load_history=load_history_summary
+            )
             return 1
         except (URLError, Exception) as exc:
-            write_mpc_weather_failures(args.share_dir, str(exc))
+            write_mpc_chain_failure(
+                args.share_dir, str(exc), load_history=load_history_summary
+            )
             return 1
 
         completed_at = datetime.now(ZoneInfo(args.timezone))
@@ -1500,6 +1715,7 @@ def main() -> int:
             args.share_dir,
             completed_at,
             prediction_horizon=prediction_horizon,
+            load_history=load_history_summary,
             credentials=load_history_credentials,
         )
         return 0 if finalized else 1

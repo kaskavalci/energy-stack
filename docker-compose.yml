@@ -30,7 +30,7 @@ services:
       - mosquitto
 
   emhass:
-    image: ghcr.io/davidusb-geek/emhass:latest
+    image: ghcr.io/davidusb-geek/emhass:v0.17.5@sha256:0aa7c9062ed269c138b6099bb2b6d7428f640d5c00cdbf31b7e0067345779b8e
     container_name: emhass
     restart: unless-stopped
     env_file:

@@ -1,9 +1,10 @@
 import importlib.util
+import io
 import json
 import sys
 import tempfile
 import unittest
-from contextlib import ExitStack
+from contextlib import ExitStack, redirect_stdout
 from datetime import datetime, timedelta, timezone
 from http.client import IncompleteRead
 from pathlib import Path
@@ -65,6 +66,155 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
             "attributes": {},
         }
 
+    def records_with_missing_bins(
+        self,
+        *,
+        horizon: int,
+        missing_indices: set[int],
+    ) -> list[dict]:
+        newest = datetime.fromisoformat("2026-07-26T15:32:00+02:00")
+        first = newest - timedelta(minutes=30 * (horizon - 1))
+        return [
+            self.record(
+                str(100 + index * 10),
+                (first + timedelta(minutes=30 * index)).isoformat(),
+            )
+            for index in range(horizon)
+            if index not in missing_indices
+        ]
+
+    def test_complete_history_is_healthy(self):
+        summary = fetch_prices_emhass.validate_load_history_records(
+            self.records_with_missing_bins(horizon=32, missing_indices=set()),
+            prediction_horizon=32,
+            step_min=30,
+            now=self.now,
+        )
+        self.assertEqual(summary["mode"], "healthy")
+        self.assertEqual(summary["covered_bins"], 32)
+        self.assertEqual(summary["missing_bin_count"], 0)
+        self.assertEqual(summary["missing_bins"], [])
+        self.assertIsNone(summary["interpolation_method"])
+
+    def test_six_bin_bracketed_interior_gap_is_degraded(self):
+        summary = fetch_prices_emhass.validate_load_history_records(
+            self.records_with_missing_bins(
+                horizon=32,
+                missing_indices=set(range(10, 16)),
+            ),
+            prediction_horizon=32,
+            step_min=30,
+            now=self.now,
+        )
+        self.assertEqual(summary["mode"], "degraded")
+        self.assertEqual(summary["covered_bins"], 26)
+        self.assertEqual(summary["missing_bin_count"], 6)
+        self.assertEqual(summary["gap_duration_minutes"], 180)
+        self.assertEqual(
+            summary["interpolation_method"],
+            "emhass_native_linear",
+        )
+        self.assertEqual(
+            datetime.fromisoformat(summary["gap_end_exclusive"])
+            - datetime.fromisoformat(summary["gap_start"]),
+            timedelta(minutes=180),
+        )
+
+    def test_seven_bin_gap_is_unsafe(self):
+        with self.assertRaises(fetch_prices_emhass.LoadHistoryError) as raised:
+            fetch_prices_emhass.validate_load_history_records(
+                self.records_with_missing_bins(
+                    horizon=32,
+                    missing_indices=set(range(10, 17)),
+                ),
+                prediction_horizon=32,
+                step_min=30,
+                now=self.now,
+            )
+        self.assertEqual(raised.exception.summary["mode"], "unsafe")
+        self.assertEqual(raised.exception.summary["missing_bin_count"], 7)
+
+    def test_stale_newest_sample_is_unsafe_with_diagnostics(self):
+        with self.assertRaises(fetch_prices_emhass.LoadHistoryError) as raised:
+            fetch_prices_emhass.validate_load_history_records(
+                self.records_with_missing_bins(
+                    horizon=32,
+                    missing_indices=set(),
+                ),
+                prediction_horizon=32,
+                step_min=30,
+                now=datetime.fromisoformat(
+                    "2026-07-26T15:40:00+02:00"
+                ),
+            )
+        self.assertEqual(raised.exception.summary["mode"], "unsafe")
+        self.assertEqual(
+            raised.exception.summary["newest_sample_age_minutes"],
+            8.0,
+        )
+        self.assertEqual(raised.exception.summary["missing_bins"], [])
+
+    def test_multiple_gaps_are_unsafe(self):
+        with self.assertRaises(fetch_prices_emhass.LoadHistoryError) as raised:
+            fetch_prices_emhass.validate_load_history_records(
+                self.records_with_missing_bins(
+                    horizon=32,
+                    missing_indices={5, 6, 20},
+                ),
+                prediction_horizon=32,
+                step_min=30,
+                now=self.now,
+            )
+        self.assertEqual(raised.exception.summary["mode"], "unsafe")
+
+    def test_oldest_and_newest_edge_gaps_are_unsafe(self):
+        for missing_indices in ({0}, {31}):
+            with self.subTest(missing_indices=missing_indices):
+                with self.assertRaises(fetch_prices_emhass.LoadHistoryError):
+                    fetch_prices_emhass.validate_load_history_records(
+                        self.records_with_missing_bins(
+                            horizon=32,
+                            missing_indices=missing_indices,
+                        ),
+                        prediction_horizon=32,
+                        step_min=30,
+                        now=self.now,
+                    )
+
+    def test_six_bins_remain_absolute_for_twelve_step_horizon(self):
+        summary = fetch_prices_emhass.validate_load_history_records(
+            self.records_with_missing_bins(
+                horizon=12,
+                missing_indices=set(range(3, 9)),
+            ),
+            prediction_horizon=12,
+            step_min=30,
+            now=self.now,
+        )
+        self.assertEqual(summary["mode"], "degraded")
+        self.assertEqual(summary["missing_bin_count"], 6)
+
+    def test_each_allowed_gap_length_is_degraded(self):
+        for gap_length in range(1, 7):
+            with self.subTest(gap_length=gap_length):
+                start = 10
+                summary = fetch_prices_emhass.validate_load_history_records(
+                    self.records_with_missing_bins(
+                        horizon=32,
+                        missing_indices=set(
+                            range(start, start + gap_length)
+                        ),
+                    ),
+                    prediction_horizon=32,
+                    step_min=30,
+                    now=self.now,
+                )
+                self.assertEqual(summary["mode"], "degraded")
+                self.assertEqual(
+                    summary["missing_bin_count"],
+                    gap_length,
+                )
+
     def test_accepts_complete_valid_half_hour_bins(self):
         records = [
             self.record("125", "2026-07-26T14:31:00+02:00"),
@@ -82,10 +232,14 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
         self.assertEqual(
             summary,
             {
+                "mode": "healthy",
                 "required_bins": 3,
                 "covered_bins": 3,
-                "newest_sample_at": "2026-07-26T15:32:00+02:00",
-                "newest_sample_age_min": 2.0,
+                "missing_bin_count": 0,
+                "missing_bins": [],
+                "interpolation_method": None,
+                "newest_sample_at": "2026-07-26T13:32:00+00:00",
+                "newest_sample_age_minutes": 2.0,
             },
         )
 
@@ -104,10 +258,11 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
             now=now,
         )
 
+        self.assertEqual(summary["mode"], "healthy")
         self.assertEqual(summary["covered_bins"], 3)
         self.assertEqual(
             summary["newest_sample_at"],
-            "2026-07-27T21:59:00+02:00",
+            "2026-07-27T19:59:00+00:00",
         )
 
     def test_at_2200_after_first_current_bin_sample_advances_newest_bin(self):
@@ -125,10 +280,11 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
             now=now,
         )
 
+        self.assertEqual(summary["mode"], "healthy")
         self.assertEqual(summary["covered_bins"], 3)
         self.assertEqual(
             summary["newest_sample_at"],
-            "2026-07-27T22:00:01+02:00",
+            "2026-07-27T20:00:01+00:00",
         )
 
     def test_at_2230_before_first_current_bin_sample_uses_newest_bin(self):
@@ -146,10 +302,11 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
             now=now,
         )
 
+        self.assertEqual(summary["mode"], "healthy")
         self.assertEqual(summary["covered_bins"], 3)
         self.assertEqual(
             summary["newest_sample_at"],
-            "2026-07-27T22:29:00+02:00",
+            "2026-07-27T20:29:00+00:00",
         )
 
     def test_at_2230_after_first_current_bin_sample_advances_newest_bin(self):
@@ -167,29 +324,31 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
             now=now,
         )
 
+        self.assertEqual(summary["mode"], "healthy")
         self.assertEqual(summary["covered_bins"], 3)
         self.assertEqual(
             summary["newest_sample_at"],
-            "2026-07-27T22:30:01+02:00",
+            "2026-07-27T20:30:01+00:00",
         )
 
     def test_boundary_rejects_fresh_history_with_missing_older_bin(self):
         now = datetime.fromisoformat("2026-07-27T22:00:02+02:00")
         records = [
-            self.record("100", "2026-07-27T20:31:00+02:00"),
+            self.record("100", "2026-07-27T21:01:00+02:00"),
             self.record("100", "2026-07-27T21:59:00+02:00"),
         ]
 
         with self.assertRaisesRegex(
             fetch_prices_emhass.LoadHistoryError,
-            r"2026-07-27T21:00:00\+02:00",
-        ):
+            r"2026-07-27T20:30:00\+02:00",
+        ) as raised:
             fetch_prices_emhass.validate_load_history_records(
                 records,
                 prediction_horizon=3,
                 step_min=30,
                 now=now,
             )
+        self.assertEqual(raised.exception.summary["mode"], "unsafe")
 
     def test_boundary_rejects_stale_newest_sample_before_anchoring(self):
         now = datetime.fromisoformat("2026-07-27T22:00:02+02:00")
@@ -231,10 +390,14 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
         self.assertEqual(
             summary,
             {
+                "mode": "healthy",
                 "required_bins": 1,
                 "covered_bins": 1,
-                "newest_sample_at": "2026-10-25T02:31:00+02:00",
-                "newest_sample_age_min": 3.0,
+                "missing_bin_count": 0,
+                "missing_bins": [],
+                "interpolation_method": None,
+                "newest_sample_at": "2026-10-25T00:31:00+00:00",
+                "newest_sample_age_minutes": 3.0,
             },
         )
 
@@ -287,10 +450,14 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
         self.assertEqual(
             summary,
             {
+                "mode": "healthy",
                 "required_bins": 4,
                 "covered_bins": 4,
-                "newest_sample_at": "2026-10-25T02:31:00+01:00",
-                "newest_sample_age_min": 3.0,
+                "missing_bin_count": 0,
+                "missing_bins": [],
+                "interpolation_method": None,
+                "newest_sample_at": "2026-10-25T01:31:00+00:00",
+                "newest_sample_age_minutes": 3.0,
             },
         )
 
@@ -376,10 +543,14 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
         self.assertEqual(
             summary,
             {
+                "mode": "healthy",
                 "required_bins": 32,
                 "covered_bins": 32,
-                "newest_sample_at": "2026-03-29T03:31:00+02:00",
-                "newest_sample_age_min": 3.0,
+                "missing_bin_count": 0,
+                "missing_bins": [],
+                "interpolation_method": None,
+                "newest_sample_at": "2026-03-29T01:31:00+00:00",
+                "newest_sample_age_minutes": 3.0,
             },
         )
 
@@ -447,8 +618,9 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
             now=self.now,
         )
 
+        self.assertEqual(summary["mode"], "healthy")
         self.assertEqual(summary["covered_bins"], 1)
-        self.assertEqual(summary["newest_sample_age_min"], 2.0)
+        self.assertEqual(summary["newest_sample_age_minutes"], 2.0)
 
     def test_rejects_nonfinite_and_negative_samples(self):
         for state in ("nan", "inf", "-1"):
@@ -863,10 +1035,14 @@ class FetchNativeLoadHistoryTests(unittest.TestCase):
     ):
         mock_fetch_history.return_value = []
         mock_validate_records.return_value = {
+            "mode": "healthy",
             "required_bins": 32,
             "covered_bins": 32,
+            "missing_bin_count": 0,
+            "missing_bins": [],
+            "interpolation_method": None,
             "newest_sample_at": "unused",
-            "newest_sample_age_min": 1.0,
+            "newest_sample_age_minutes": 1.0,
         }
         cases = [
             (
@@ -942,6 +1118,22 @@ class MpcLoadHistoryFailureTests(unittest.TestCase):
     }
 
     @staticmethod
+    def degraded_summary() -> dict:
+        return {
+            "mode": "degraded",
+            "required_bins": 3,
+            "covered_bins": 2,
+            "missing_bin_count": 1,
+            "missing_bins": ["2026-07-26T13:00:00+00:00"],
+            "gap_start": "2026-07-26T13:00:00+00:00",
+            "gap_end_exclusive": "2026-07-26T13:30:00+00:00",
+            "gap_duration_minutes": 30,
+            "interpolation_method": "emhass_native_linear",
+            "newest_sample_at": "2026-07-26T13:32:00+00:00",
+            "newest_sample_age_minutes": 2.0,
+        }
+
+    @staticmethod
     def response_bytes(body: bytes):
         response = MagicMock()
         response.__enter__.return_value = response
@@ -1009,6 +1201,12 @@ class MpcLoadHistoryFailureTests(unittest.TestCase):
                     ),
                 )
             )
+            stack.enter_context(
+                patch.object(
+                    fetch_prices_emhass,
+                    "ensure_weather_forecast_cache",
+                )
+            )
             self.emhass_action = stack.enter_context(
                 patch.object(fetch_prices_emhass, "call_emhass_action")
             )
@@ -1016,6 +1214,7 @@ class MpcLoadHistoryFailureTests(unittest.TestCase):
                 patch.object(
                     fetch_prices_emhass,
                     "finalize_successful_mpc_run",
+                    return_value=True,
                 )
             )
             stack.enter_context(patch.object(sys, "argv", argv))
@@ -1035,6 +1234,218 @@ class MpcLoadHistoryFailureTests(unittest.TestCase):
         self.emhass_action.assert_not_called()
         self.finalizer.assert_not_called()
         return status
+
+    def test_abort_mpc_load_history_constructs_fallback_unsafe_summary_when_summary_is_none(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            share = Path(tmp)
+            fetch_prices_emhass._abort_mpc_load_history(
+                share,
+                "HA REST request failed",
+                summary=None,
+                prediction_horizon=32,
+            )
+            status = self.read_status(share)
+            summary = status["mpc"]["load_history"]
+            self.assertEqual(summary["mode"], "unsafe")
+            self.assertEqual(summary["required_bins"], 32)
+            self.assertEqual(summary["missing_bin_count"], 32)
+
+    def test_dry_run_handles_load_history_error_without_crashing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            share = Path(tmp)
+            secrets = self.write_valid_inputs(share)
+            argv = [
+                "fetch_prices_emhass.py",
+                "--action",
+                "mpc",
+                "--dry-run",
+                "--share-dir",
+                str(share),
+                "--secrets",
+                str(secrets),
+            ]
+            stdout = io.StringIO()
+            with (
+                patch.object(
+                    fetch_prices_emhass,
+                    "fetch_soc_init",
+                    return_value=0.5,
+                ),
+                patch.object(
+                    fetch_prices_emhass,
+                    "fetch_soc_limit",
+                    return_value=0.05,
+                ),
+                patch.object(
+                    fetch_prices_emhass,
+                    "price_fetch_summary",
+                    return_value={"prediction_horizon_effective": 3},
+                ),
+                patch.object(
+                    fetch_prices_emhass,
+                    "validate_native_load_history",
+                    side_effect=fetch_prices_emhass.LoadHistoryError(
+                        "HA unavailable"
+                    ),
+                ),
+                patch.object(sys, "argv", argv),
+                redirect_stdout(stdout),
+            ):
+                exit_code = fetch_prices_emhass.main()
+
+            output = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(output["load_history"]["mode"], "unsafe")
+        self.assertEqual(output["load_history"]["error"], "HA unavailable")
+
+    def test_dry_run_with_missing_credentials_does_not_write_status_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            share = Path(tmp)
+            missing_secrets = share / "missing_secrets.yaml"
+            argv = [
+                "fetch_prices_emhass.py",
+                "--action",
+                "mpc",
+                "--dry-run",
+                "--share-dir",
+                str(share),
+                "--secrets",
+                str(missing_secrets),
+            ]
+            stdout = io.StringIO()
+            with patch.object(sys, "argv", argv), redirect_stdout(stdout):
+                exit_code = fetch_prices_emhass.main()
+
+            output = json.loads(stdout.getvalue())
+            self.assertEqual(exit_code, 1)
+            self.assertEqual(output["load_history"]["mode"], "unsafe")
+            self.assertFalse((share / "last_enever_run.json").is_file())
+
+    def test_degraded_history_runs_identical_native_payload(self):
+        summary = self.degraded_summary()
+        with tempfile.TemporaryDirectory() as tmp:
+            share = Path(tmp)
+            secrets = self.write_valid_inputs(share)
+            with patch.object(
+                fetch_prices_emhass,
+                "validate_native_load_history",
+                return_value=summary,
+            ):
+                exit_code = self.invoke_main(share, secrets)
+
+        self.assertEqual(exit_code, 0)
+        optim_calls = [
+            item for item in self.emhass_action.call_args_list
+            if item.args[1] == "naive-mpc-optim"
+        ]
+        self.assertEqual(len(optim_calls), 1)
+        payload = optim_calls[0].args[2]
+        self.assertEqual(payload["prediction_horizon"], 3)
+        self.assertNotIn("load_power_forecast", payload)
+        self.assertNotIn("alpha", payload)
+        self.assertNotIn("beta", payload)
+        self.assertEqual(
+            self.finalizer.call_args.kwargs["load_history"],
+            summary,
+        )
+
+    def test_unsafe_history_persists_summary_and_skips_emhass(self):
+        unsafe_summary = {
+            "mode": "unsafe",
+            "required_bins": 3,
+            "covered_bins": 1,
+            "missing_bin_count": 2,
+            "missing_bins": [
+                "2026-07-26T12:30:00+00:00",
+                "2026-07-26T13:00:00+00:00",
+            ],
+            "interpolation_method": None,
+            "newest_sample_at": "2026-07-26T13:32:00+00:00",
+            "newest_sample_age_minutes": 2.0,
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            share = Path(tmp)
+            secrets = self.write_valid_inputs(share)
+            with patch.object(
+                fetch_prices_emhass,
+                "validate_native_load_history",
+                side_effect=fetch_prices_emhass.LoadHistoryError(
+                    "unsafe gap",
+                    summary=unsafe_summary,
+                ),
+            ):
+                exit_code = self.invoke_main(share, secrets)
+            status = self.assert_load_history_abort(share, exit_code)
+
+        self.assertEqual(status["mpc"]["load_history"], unsafe_summary)
+
+    def test_dry_run_fetches_history_and_reports_mode_without_writes(self):
+        summary = self.degraded_summary()
+        with tempfile.TemporaryDirectory() as tmp:
+            share = Path(tmp)
+            secrets = self.write_valid_inputs(share)
+            argv = [
+                "fetch_prices_emhass.py",
+                "--action",
+                "mpc",
+                "--dry-run",
+                "--share-dir",
+                str(share),
+                "--secrets",
+                str(secrets),
+            ]
+            stdout = io.StringIO()
+            with (
+                patch.object(
+                    fetch_prices_emhass,
+                    "fetch_soc_init",
+                    return_value=0.5,
+                ),
+                patch.object(
+                    fetch_prices_emhass,
+                    "fetch_soc_limit",
+                    return_value=0.05,
+                ),
+                patch.object(
+                    fetch_prices_emhass,
+                    "price_fetch_summary",
+                    return_value={"prediction_horizon_effective": 3},
+                ),
+                patch.object(
+                    fetch_prices_emhass,
+                    "validate_native_load_history",
+                    return_value=summary,
+                ),
+                patch.object(
+                    fetch_prices_emhass,
+                    "refresh_price_csvs_from_ha",
+                ) as refresh_prices,
+                patch.object(
+                    fetch_prices_emhass,
+                    "run_mpc_chain",
+                ) as run_chain,
+                patch.object(
+                    fetch_prices_emhass,
+                    "write_run_status",
+                ) as write_status,
+                patch.object(
+                    fetch_prices_emhass,
+                    "finalize_successful_mpc_run",
+                ) as finalizer,
+                patch.object(sys, "argv", argv),
+                redirect_stdout(stdout),
+            ):
+                exit_code = fetch_prices_emhass.main()
+
+            output = json.loads(stdout.getvalue())
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(output["load_history"], summary)
+        refresh_prices.assert_not_called()
+        run_chain.assert_not_called()
+        write_status.assert_not_called()
+        finalizer.assert_not_called()
 
     def test_optional_soc_contains_protocol_decode_and_invalid_value_failures(self):
         failures = [
@@ -1865,6 +2276,26 @@ class FinalizeSuccessfulMpcRunTests(unittest.TestCase):
         self.secrets = Path("/tmp/finalize_mpc_secrets.yaml")
         self.share = Path("/tmp/finalize_mpc_share")
         self.completed_at = datetime.fromisoformat("2026-07-19T11:00:03+02:00")
+        self.load_history = {
+            "mode": "degraded",
+            "required_bins": 32,
+            "covered_bins": 26,
+            "missing_bin_count": 6,
+            "missing_bins": [
+                "2026-07-29T02:30:00+00:00",
+                "2026-07-29T03:00:00+00:00",
+                "2026-07-29T03:30:00+00:00",
+                "2026-07-29T04:00:00+00:00",
+                "2026-07-29T04:30:00+00:00",
+                "2026-07-29T05:00:00+00:00",
+            ],
+            "gap_start": "2026-07-29T02:30:00+00:00",
+            "gap_end_exclusive": "2026-07-29T05:30:00+00:00",
+            "gap_duration_minutes": 180,
+            "interpolation_method": "emhass_native_linear",
+            "newest_sample_at": "2026-07-29T05:49:00+00:00",
+            "newest_sample_age_minutes": 1.0,
+        }
 
     @patch.object(fetch_prices_emhass, "write_run_status")
     @patch.object(fetch_prices_emhass, "publish_ha_input_datetime")
@@ -1878,6 +2309,7 @@ class FinalizeSuccessfulMpcRunTests(unittest.TestCase):
             self.share,
             self.completed_at,
             prediction_horizon=26,
+            load_history=self.load_history,
         )
 
         self.assertTrue(ok)
@@ -1894,6 +2326,7 @@ class FinalizeSuccessfulMpcRunTests(unittest.TestCase):
             metadata={
                 "prediction_horizon": 26,
                 "plan_generated_at": self.completed_at.isoformat(),
+                "load_history": self.load_history,
             },
         )
         mock_status.assert_any_call(self.share, "weather", ok=True)
@@ -1908,6 +2341,7 @@ class FinalizeSuccessfulMpcRunTests(unittest.TestCase):
             self.share,
             self.completed_at,
             prediction_horizon=26,
+            load_history=self.load_history,
         )
 
         self.assertFalse(ok)
@@ -1917,6 +2351,114 @@ class FinalizeSuccessfulMpcRunTests(unittest.TestCase):
             ok=False,
             error="HA successful-MPC marker failed: HA unavailable",
             failure_kind="status_publish",
+            metadata={"load_history": self.load_history},
+        )
+
+
+class MpcChainFailureClassificationTests(unittest.TestCase):
+    def setUp(self):
+        self.share = Path("/tmp/mpc-chain-failure-share")
+        self.degraded = {
+            "mode": "degraded",
+            "missing_bin_count": 1,
+            "missing_bins": ["2026-07-29T03:00:00+00:00"],
+        }
+        self.healthy = {
+            "mode": "healthy",
+            "missing_bin_count": 0,
+            "missing_bins": [],
+        }
+
+    @patch.object(fetch_prices_emhass, "write_run_status")
+    def test_degraded_load_forecast_error_is_classified(
+        self,
+        mock_status,
+    ):
+        error = "naive-mpc-optim get_mix_forecast failed"
+        fetch_prices_emhass.write_mpc_chain_failure(
+            self.share,
+            error,
+            load_history=self.degraded,
+        )
+        mock_status.assert_called_once_with(
+            self.share,
+            "mpc",
+            ok=False,
+            error=error,
+            failure_kind="load_interpolation",
+            metadata={"load_history": self.degraded},
+        )
+
+    @patch.object(fetch_prices_emhass, "write_run_status")
+    def test_weather_error_wins_over_degraded_load_classification(
+        self,
+        mock_status,
+    ):
+        error = "Open-Meteo get_mix_forecast request failed"
+        fetch_prices_emhass.write_mpc_chain_failure(
+            self.share,
+            error,
+            load_history=self.degraded,
+        )
+        self.assertEqual(
+            mock_status.call_args_list,
+            [
+                call(
+                    self.share,
+                    "mpc",
+                    ok=False,
+                    error=error,
+                    failure_kind="weather",
+                    metadata={"load_history": self.degraded},
+                ),
+                call(
+                    self.share,
+                    "weather",
+                    ok=False,
+                    error=error,
+                    failure_kind="weather",
+                ),
+            ],
+        )
+
+    @patch.object(fetch_prices_emhass, "write_run_status")
+    def test_degraded_generic_solver_error_gets_no_invented_kind(
+        self,
+        mock_status,
+    ):
+        error = "optimizer returned infeasible"
+        fetch_prices_emhass.write_mpc_chain_failure(
+            self.share,
+            error,
+            load_history=self.degraded,
+        )
+        mock_status.assert_called_once_with(
+            self.share,
+            "mpc",
+            ok=False,
+            error=error,
+            failure_kind=None,
+            metadata={"load_history": self.degraded},
+        )
+
+    @patch.object(fetch_prices_emhass, "write_run_status")
+    def test_healthy_load_error_is_not_degraded_interpolation(
+        self,
+        mock_status,
+    ):
+        error = "get_load_forecast failed"
+        fetch_prices_emhass.write_mpc_chain_failure(
+            self.share,
+            error,
+            load_history=self.healthy,
+        )
+        mock_status.assert_called_once_with(
+            self.share,
+            "mpc",
+            ok=False,
+            error=error,
+            failure_kind=None,
+            metadata={"load_history": self.healthy},
         )
 
 

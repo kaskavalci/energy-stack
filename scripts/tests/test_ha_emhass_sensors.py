@@ -100,6 +100,27 @@ class EmhassLoadSampleSensorTests(unittest.TestCase):
             {"sampled_at": "{{ now().isoformat() }}"},
         )
 
+    def test_raw_house_load_requires_live_p1_battery_and_daylight_pv(self) -> None:
+        sensor = self.raw_sensor()
+        state = " ".join(str(sensor.get("state", "")).split())
+        availability = " ".join(
+            str(sensor.get("availability", "")).split()
+        )
+        self.assertIn("__P1_POWER_NET_ENTITY__", state)
+        self.assertIn(
+            "sensor.__SIGEN_PLANT_SLUG___plant_battery_power",
+            state,
+        )
+        self.assertIn("__ENVOY_PV_ENTITY__", state)
+        self.assertIn("__P1_POWER_NET_ENTITY__", availability)
+        self.assertIn(
+            "sensor.__SIGEN_PLANT_SLUG___plant_battery_power",
+            availability,
+        )
+        self.assertIn("__ENVOY_PV_ENTITY__", availability)
+        self.assertIn("20 * 60", availability)
+        self.assertIn("sun_up or raw_pv_w > 50", availability)
+
 
 if __name__ == "__main__":
     unittest.main()

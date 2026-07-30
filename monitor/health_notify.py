@@ -7,6 +7,7 @@ Runs via supercronic in energy-monitor container (docker.sock + /share read-only
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -20,6 +21,9 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+LOAD_HISTORY_STATE_KEY = "_load_history_incident"
+
 
 from weather_cache_stale import (
     docker_available,
@@ -99,6 +103,17 @@ def _dedup_path(share: Path) -> Path:
 class AlertState:
     last_notify: float = 0.0
     consecutive_failures: int = 0
+    incident_mode: str | None = None
+    incident_signature: str | None = None
+
+
+@dataclass(frozen=True)
+class LoadHistoryTransition:
+    mode: str
+    signature: str | None
+    alert_id: str
+    title: str
+    message: str
 
 
 def _parse_alert_entry(val: object) -> AlertState:
@@ -108,6 +123,8 @@ def _parse_alert_entry(val: object) -> AlertState:
         return AlertState(
             last_notify=float(val.get("last_notify", 0) or 0),
             consecutive_failures=int(val.get("consecutive_failures", 0) or 0),
+            incident_mode=val.get("incident_mode"),
+            incident_signature=val.get("incident_signature"),
         )
     return AlertState()
 
@@ -135,7 +152,13 @@ def load_alert_state(share: Path) -> dict[str, AlertState]:
 def persist_alert_state(share: Path, state: dict[str, AlertState]) -> None:
     raw: dict[str, object] = {}
     for key, entry in state.items():
-        if key in B5_SUSTAINED_IDS:
+        if key == LOAD_HISTORY_STATE_KEY:
+            raw[key] = {
+                "last_notify": entry.last_notify,
+                "incident_mode": entry.incident_mode,
+                "incident_signature": entry.incident_signature,
+            }
+        elif key in B5_SUSTAINED_IDS:
             raw[key] = {
                 "last_notify": entry.last_notify,
                 "consecutive_failures": entry.consecutive_failures,
@@ -143,6 +166,199 @@ def persist_alert_state(share: Path, state: dict[str, AlertState]) -> None:
         elif entry.last_notify:
             raw[key] = entry.last_notify
     _atomic_write_text(_dedup_path(share), json.dumps(raw, indent=2))
+
+
+def normalize_load_history_error(error: str) -> str:
+    normalized = re.sub(
+        r"\(\d+(\.\d+)? minutes old; maximum \d+\)",
+        "(stale)",
+        error,
+    )
+    return normalized[:200]
+
+
+def load_history_signature(mpc: dict) -> str:
+    load_history = mpc.get("load_history")
+    missing_bins = (
+        load_history.get("missing_bins", [])
+        if isinstance(load_history, dict)
+        else []
+    )
+    payload = {
+        "failure_kind": mpc.get("failure_kind"),
+        "missing_bins": [str(value) for value in missing_bins],
+    }
+    if not payload["missing_bins"]:
+        raw_error = str(mpc.get("error", ""))
+        payload["error"] = normalize_load_history_error(raw_error)
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def detect_load_history_transition(
+    mpc: dict,
+    state: AlertState,
+) -> LoadHistoryTransition | None:
+    load_history = mpc.get("load_history")
+    if not isinstance(load_history, dict):
+        return None
+    reported_mode = load_history.get("mode")
+    mode: str | None = None
+    if mpc.get("ok") is True and reported_mode == "degraded":
+        mode = "degraded"
+    elif (
+        mpc.get("ok") is False
+        and mpc.get("failure_kind") == "load_history"
+    ):
+        mode = "unsafe"
+    elif mpc.get("ok") is True and reported_mode == "healthy":
+        mode = "healthy"
+    if mode is None:
+        return None
+
+    if mode == "healthy":
+        if state.incident_mode not in ("degraded", "unsafe"):
+            return None
+        return LoadHistoryTransition(
+            mode="healthy",
+            signature=None,
+            alert_id="B6_load_history_recovered",
+            title="EMHASS load history recovered",
+            message=(
+                "Native MPC load history is healthy again; "
+                "degraded/unsafe gap incident cleared."
+            ),
+        )
+
+    signature = load_history_signature(mpc)
+    if (
+        state.incident_mode == mode
+        and state.incident_signature == signature
+    ):
+        return None
+    missing = int(load_history.get("missing_bin_count", 0) or 0)
+    duration = int(load_history.get("gap_duration_minutes", 0) or 0)
+    if mode == "degraded":
+        return LoadHistoryTransition(
+            mode=mode,
+            signature=signature,
+            alert_id="B6_load_history_degraded",
+            title="EMHASS load history degraded",
+            message=(
+                f"MPC remains operational with native interpolation for "
+                f"{missing} missing bin(s), {duration} minutes."
+            ),
+        )
+    return LoadHistoryTransition(
+        mode=mode,
+        signature=signature,
+        alert_id="B6_load_history_unsafe",
+        title="EMHASS load history unsafe",
+        message=(
+            f"MPC is fail-closed for {missing} missing bin(s); "
+            "Sigenergy remains in native self-consumption."
+        ),
+    )
+
+
+def apply_load_history_transition(
+    state: AlertState,
+    transition: LoadHistoryTransition,
+    *,
+    notified_at: float,
+) -> None:
+    state.incident_mode = transition.mode
+    state.incident_signature = transition.signature
+    state.last_notify = notified_at
+
+
+def suppress_load_history_derivatives(
+    failures: list[tuple[str, str, str]],
+    mpc: dict,
+) -> list[tuple[str, str, str]]:
+    load_history = mpc.get("load_history")
+    if not (
+        mpc.get("ok") is False
+        and mpc.get("failure_kind") == "load_history"
+        and isinstance(load_history, dict)
+        and load_history.get("mode") in ("degraded", "unsafe")
+    ):
+        return failures
+    suppressed = {"B2_mpc", "B3", "B5_cache"}
+    return [
+        failure for failure in failures
+        if failure[0] not in suppressed
+    ]
+
+
+def read_mpc_block(share: Path) -> dict | None:
+    path = share / "last_enever_run.json"
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    mpc = data.get("mpc")
+    return mpc if isinstance(mpc, dict) else None
+
+
+def process_load_history_transition(
+    alert_state: dict[str, AlertState],
+    mpc: dict | None,
+    *,
+    base_url: str,
+    token: str,
+    service: str,
+    now: float,
+) -> bool:
+    if mpc is None:
+        return False
+    incident = alert_state.setdefault(
+        LOAD_HISTORY_STATE_KEY,
+        AlertState(),
+    )
+    transition = detect_load_history_transition(mpc, incident)
+    if transition is None:
+        return False
+    try:
+        notify_ha(
+            base_url,
+            token,
+            service,
+            f"Energy: {transition.title}",
+            transition.message,
+        )
+    except urllib.error.HTTPError as exc:
+        logging.error(
+            "HA notify failed %s: %s %s",
+            transition.alert_id,
+            exc.code,
+            exc.read()[:200],
+        )
+        return False
+    except Exception as exc:
+        logging.error(
+            "HA notify failed %s: %s",
+            transition.alert_id,
+            exc,
+        )
+        return False
+    apply_load_history_transition(
+        incident,
+        transition,
+        notified_at=now,
+    )
+    logging.info(
+        "Notified HA: %s — %s",
+        transition.alert_id,
+        transition.message[:120],
+    )
+    return True
 
 
 def record_b5_outcomes(state: dict[str, AlertState], failing_ids: set[str]) -> None:
@@ -447,11 +663,24 @@ def main() -> int:
             if aid not in ("B2_mpc", "B2_weather")
         ]
 
+    mpc = read_mpc_block(share)
+    if mpc is not None:
+        failures = suppress_load_history_derivatives(failures, mpc)
+
     failing_ids = {alert_id for alert_id, _, _ in failures}
     alert_state = load_alert_state(share)
     record_b5_outcomes(alert_state, failing_ids)
 
     now = time.time()
+    process_load_history_transition(
+        alert_state,
+        mpc,
+        base_url=base_url,
+        token=token,
+        service=notify_svc,
+        now=now,
+    )
+
     sent = 0
     for alert_id, title, message in failures:
         entry = alert_state.setdefault(alert_id, AlertState())

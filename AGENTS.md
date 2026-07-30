@@ -68,6 +68,16 @@ HA deploy uses **additive merge** (`scripts/lib/ha_config_merge.py`) — only up
 - Weather retry → `clear_weather_cache_files()` before EMHASS `weather-forecast-cache`
 - Shared stale logic: `lib/weather_cache_stale.py` (cron + monitor)
 
+### EMHASS upgrades
+
+- `docker-compose.yml` must use a release tag plus immutable digest, never
+  `latest`.
+- Before changing the EMHASS image, run
+  `./scripts/verify-emhass-load-gap-contract.sh '<tag@sha256:digest>'`, the
+  Compose pin test, and the full cron tests.
+- Record passing output in `docs/verification/emhass/`. Do not infer native
+  interpolation compatibility from release notes alone.
+
 ## Key docs
 
 | Topic | Path |

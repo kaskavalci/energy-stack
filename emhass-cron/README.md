@@ -24,9 +24,23 @@ horizon it queries one extra preceding half-hour. Once the newest finite
 sample passes the five-minute freshness limit, its floored UTC bin anchors the
 required consecutive bins. At exactly `:00` or `:30`, the window therefore
 stays on the last completed bin until the first sample in the new bin arrives,
-then advances. Every required bin needs a finite, non-negative sample; a valid
-`0 W` sample passes. Validation submits no load forecast and has no retry or
-fallback. Query bounds, timestamps, freshness, flooring, and coverage are
+then advances.
+
+Load history is classified per effective horizon:
+
+- `healthy`: all required half-hour bins are covered;
+- `degraded`: exactly one fully bracketed interior gap contains at most six
+  consecutive bins and the newest composite sample is no older than five
+  minutes;
+- `unsafe`: longer, multiple, edge, unbracketed, stale, or malformed history.
+
+Healthy and degraded runs use the same native `naive-mpc-optim` payload. Cron
+does not send `load_power_forecast`, `alpha`, or `beta`; EMHASS performs its
+configured in-memory linear interpolation. Unsafe history aborts before
+optimization or publication. `last_enever_run.json` records the mode, missing
+UTC bins, brackets, duration, method, and newest sample.
+
+Query bounds, timestamps, freshness, flooring, and coverage are
 evaluated as UTC instants so daylight-saving folds and gaps contain exactly
 the real elapsed half-hours; local time is display only. Offset-less HA
 timestamps cannot satisfy the gate.

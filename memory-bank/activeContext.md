@@ -1,7 +1,30 @@
 # Active Context
 
-**Last updated:** 2026-07-27 ~23:02 CEST
+**Last updated:** 2026-07-29 ~19:32 CEST
 **Author:** Auto
+
+## Bounded Load-Gap Degraded Mode — DEPLOYED (2026-07-29)
+
+- **Pinned Image:** `ghcr.io/davidusb-geek/emhass:v0.17.5@sha256:0aa7c9062ed269c138b6099bb2b6d7428f640d5c00cdbf31b7e0067345779b8e` (Package `0.17.5`, Source revision `a482de7c9e7aa43691fabc1910026168d60f5050`).
+- **Local Verification:** 156 unit tests passing (77 cron, 11 monitor, 68 scripts/HA), 8/8 matrix verification steps OK, contract probe `EMHASS_LOAD_GAP_CONTRACT_OK version=0.17.5 horizon=32 gap_bins=6 negative_control=pass`.
+- **Deployment:** Executed `./scripts/deploy-energy-stack.sh` at `2026-07-29 22:44 CEST`. Containers `emhass`, `emhass-cron`, `energy-monitor` recreated and healthy. Remote backup saved to `/home/halil/energy-stack-backups/load-gap-20260729-224155`.
+- **Deployed Verification:** Remote `docker inspect` confirmed exact immutable digest pin. HA control gates remained intact (`emhass_auto_control_master`: on, `emhass_control_allowed`: on, `emhass_mpc_fresh`: on).
+- **Synthetic Geometry:** Missing 1-6 bin degraded geometry and 7+/multiple/edge/stale unsafe fail-closed rules verified via synthetic test fixtures.
+
+## MPC notifications storm (2026-07-29) — root cause identified (read-only)
+
+Energy host **rebooted 04:04 CEST**. `sensor.emhass_house_load_sample_w`
+recorder gap ~**04:03–05:48 CEST** (~105 min). Fail-closed native-load gate
+has aborted every MPC since with missing bins **04:30** and **05:00**.
+
+- Last success marker: `2026-07-29 03:30:42`
+- `mpc.ok=false`, `failure_kind=load_history` (still at 19:00)
+- Alerts: **B2_mpc** (2h cooldown), **B3**, **B5_cache**, HA **A5/D1**
+- Master **on**; control blocked `plan_stale`; Sigen already native
+  self-consumption `8.8`/`9.0` kW; SOC ~80%
+- Natural recovery when those bins leave the 32-bin window (~**21:00–21:30
+  CEST**). No code change required for self-heal; fabricating load is
+  forbidden.
 
 ## Native naive load cutover — deployed; `:00` + `:30` verified; 24h open (2026-07-27)
 
