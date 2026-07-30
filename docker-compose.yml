@@ -21,8 +21,8 @@ services:
       - mosquitto
 
   sigenergy2mqtt:
-    # Pin tag+digest (multi-arch index). Latest stable: PyModbus 3.13.1 + log-skipped.
-    image: ghcr.io/seud0nym/sigenergy2mqtt:2026.7.4@sha256:5e632aa39fac352ef23a148d6274a29e43886e2d2093fe942820c3fcae290ce9
+    # Floating :latest is intentional (operator override of tag+digest pin policy).
+    image: ghcr.io/seud0nym/sigenergy2mqtt:latest
     container_name: sigenergy2mqtt
     restart: unless-stopped
     volumes:
@@ -36,7 +36,8 @@ services:
       - SIGENERGY2MQTT_MQTT_ANONYMOUS=true
 
   emhass:
-    image: ghcr.io/davidusb-geek/emhass:v0.17.5@sha256:0aa7c9062ed269c138b6099bb2b6d7428f640d5c00cdbf31b7e0067345779b8e
+    # Floating :latest is intentional (operator override of tag+digest pin policy).
+    image: ghcr.io/davidusb-geek/emhass:latest
     container_name: emhass
     restart: unless-stopped
     env_file:

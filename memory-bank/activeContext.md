@@ -1,7 +1,26 @@
 # Active Context
 
-**Last updated:** 2026-07-30 ~21:21 CEST
+**Last updated:** 2026-07-30 ~21:50 CEST
 **Author:** Auto
+
+## Floating `:latest` for EMHASS + sigenergy2mqtt — DEPLOYED (2026-07-30 ~21:49 CEST)
+
+Operator override of the usual tag+digest pin policy. Compose now uses floating
+`:latest` (comment in `docker-compose.yml` notes intentional).
+
+| Service | Before | After (`org.opencontainers.image.version`) | Health |
+|---------|--------|--------------------------------------------|--------|
+| `emhass` | `v0.17.5@sha256:0aa7c906…` | **v0.17.9** (`:latest`, rev `65a5f628…`, created 2026-07-12) | healthy |
+| `sigenergy2mqtt` | `2026.7.4@sha256:5e632aa3…` | **2026.7.4** (`:latest`, same digest/rev `b2cd5eda…`) | healthy |
+
+- MQTT env vars kept (`TZ`, `SIGENERGY2MQTT_MQTT_BROKER=mosquitto`,
+  `SIGENERGY2MQTT_MQTT_ANONYMOUS=true`).
+- Remote backup: `/home/halil/workspace/energy-stack-backups/floating-latest-20260730-214101/`.
+- Pull + `docker compose up -d --force-recreate emhass sigenergy2mqtt`; cron/monitor
+  waited on emhass healthy (not rebuilt). HA untouched.
+- **Caveat:** EMHASS jumped 0.17.5 → 0.17.9 without
+  `verify-emhass-load-gap-contract.sh` evidence (pin policy waived for this change).
+  Watch next MPC for load-gap / native-naive regressions.
 
 ## sigenergy2mqtt upgraded to 2026.7.4 — DEPLOYED (2026-07-30 ~21:19 CEST)
 
@@ -9,17 +28,13 @@
   **2026.4.16** (Apr 16; PyModbus 3.13.0). Continuous Modbus retry / wrong-ID
   noise after the Jul 29 energy-host reboot; Jul 30 arbitrage execution failed
   because command-mode dwell collapsed.
-- **Pinned:** `ghcr.io/seud0nym/sigenergy2mqtt:2026.7.4@sha256:5e632aa39fac352ef23a148d6274a29e43886e2d2093fe942820c3fcae290ce9`
-  (PyModbus **3.13.1**, revision `b2cd5eda…`).
+- Was briefly pinned `2026.7.4@sha256:5e632aa3…`, then switched to floating
+  `:latest` (still resolves to 2026.7.4) — see section above.
 - **Compose extras:** `TZ`, `SIGENERGY2MQTT_MQTT_BROKER=mosquitto`,
   `SIGENERGY2MQTT_MQTT_ANONYMOUS=true` (persistence MQTT connects before YAML
   load; without the env broker it hits `127.0.0.1` and marks health degraded).
 - **Config:** `modbus[].log-skipped: true` for transport verification.
 - **Remote backup:** `/home/halil/workspace/energy-stack-backups/sigenergy2mqtt-20260730-211503/`.
-- **Verified ~21:20 CEST:** container **healthy**, restarts=0, Modbus Protocol
-  V2.8, zero ERROR/WARNING in first ~4 min, HA master/control on, Remote EMS
-  on, mode `Command Discharging`, limits `0.0`/`0.9` kW written successfully
-  via registers 40031/40032/40034. SOC updating (~18.8%).
 - Still a **partial** mitigation of Sigenergy stale-frame behavior (#207 can
   still occur). Watch overnight command-mode dwell; set `log-skipped: false`
   once quiet if log noise is unwanted. Do not change `soc_final` first.
@@ -44,12 +59,15 @@
   stale/wrong-ID reply shared the TCP buffer (fixed in 3.13.1 / PR #2934).
 - Upgraded to 2026.7.4 as the planned controlled pin (see above).
 
-## Bounded Load-Gap Degraded Mode — DEPLOYED (2026-07-29)
+## Bounded Load-Gap Degraded Mode — DEPLOYED (2026-07-29); image later floated
 
-- **Pinned Image:** `ghcr.io/davidusb-geek/emhass:v0.17.5@sha256:0aa7c9062ed269c138b6099bb2b6d7428f640d5c00cdbf31b7e0067345779b8e` (Package `0.17.5`, Source revision `a482de7c9e7aa43691fabc1910026168d60f5050`).
-- **Local Verification:** 156 unit tests passing (77 cron, 11 monitor, 68 scripts/HA), 8/8 matrix verification steps OK, contract probe `EMHASS_LOAD_GAP_CONTRACT_OK version=0.17.5 horizon=32 gap_bins=6 negative_control=pass`.
-- **Deployment:** Executed `./scripts/deploy-energy-stack.sh` at `2026-07-29 22:44 CEST`. Containers `emhass`, `emhass-cron`, `energy-monitor` recreated and healthy. Remote backup saved to `/home/halil/energy-stack-backups/load-gap-20260729-224155`.
-- **Deployed Verification:** Remote `docker inspect` confirmed exact immutable digest pin. HA control gates remained intact (`emhass_auto_control_master`: on, `emhass_control_allowed`: on, `emhass_mpc_fresh`: on).
+- Originally pinned `emhass:v0.17.5@sha256:0aa7c906…` with contract probe
+  `EMHASS_LOAD_GAP_CONTRACT_OK version=0.17.5`. Live image is now floating
+  `emhass:latest` → **v0.17.9** (2026-07-30); see floating-latest section.
+- **Local Verification (at 0.17.5 pin):** 156 unit tests, 8/8 matrix OK.
+- **Deployment (0.17.5):** `./scripts/deploy-energy-stack.sh` at
+  `2026-07-29 22:44 CEST`. Backup:
+  `/home/halil/energy-stack-backups/load-gap-20260729-224155`.
 - **Synthetic Geometry:** Missing 1-6 bin degraded geometry and 7+/multiple/edge/stale unsafe fail-closed rules verified via synthetic test fixtures.
 
 ## MPC notifications storm (2026-07-29) — root cause identified (read-only)

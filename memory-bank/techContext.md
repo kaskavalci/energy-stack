@@ -15,7 +15,7 @@
 | `emhass` | LP optimizer, Open-Meteo, publish-data `:5000` |
 | `emhass-cron` | `fetch_prices_emhass.py` |
 | `energy-monitor` | `health_notify.py` every 10 min |
-| `mosquitto`, `mqtt4dsmr`, `sigenergy2mqtt` | MQTT bridges (`sigenergy2mqtt` pinned tag+digest like EMHASS; MQTT broker via env for early persistence) |
+| `mosquitto`, `mqtt4dsmr`, `sigenergy2mqtt` | MQTT bridges (`emhass` + `sigenergy2mqtt` use floating `:latest` by operator choice; MQTT broker via env for early persistence) |
 
 HA itself runs on the **HA host** via [`home-assistant/docker-compose.yml`](../home-assistant/docker-compose.yml) (`ghcr.io/home-assistant/home-assistant:stable`, `network_mode: host`), not on the energy host.
 
@@ -31,9 +31,10 @@ HA itself runs on the **HA host** via [`home-assistant/docker-compose.yml`](../h
   multiple, edge, unbracketed, or stale gaps fail closed.
 - Degraded mode still uses native `naive`; cron never sends a load list,
   `alpha`, or `beta`, and never writes synthetic HA recorder states.
-- EMHASS is pinned by tag+digest. Every upgrade must pass
-  `scripts/verify-emhass-load-gap-contract.sh` and record evidence before the
-  Compose image changes.
+- EMHASS compose image is currently floating `:latest` (operator override;
+  comment in `docker-compose.yml`). Prefer re-pinning tag+digest and running
+  `scripts/verify-emhass-load-gap-contract.sh` before treating upgrades as
+  verified; record evidence under `docs/verification/emhass/` when re-pinning.
 - Weather retry → `clear_weather_cache_files()` before `weather-forecast-cache`
 - Shared stale logic: `lib/weather_cache_stale.py`
 - EMHASS site location comes from validated `LAT`, `LON`, `ALT`, and
