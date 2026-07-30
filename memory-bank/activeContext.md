@@ -1,7 +1,48 @@
 # Active Context
 
-**Last updated:** 2026-07-29 ~19:32 CEST
+**Last updated:** 2026-07-30 ~21:21 CEST
 **Author:** Auto
+
+## sigenergy2mqtt upgraded to 2026.7.4 — DEPLOYED (2026-07-30 ~21:19 CEST)
+
+- **Before:** live image was still `ghcr.io/seud0nym/sigenergy2mqtt:latest` →
+  **2026.4.16** (Apr 16; PyModbus 3.13.0). Continuous Modbus retry / wrong-ID
+  noise after the Jul 29 energy-host reboot; Jul 30 arbitrage execution failed
+  because command-mode dwell collapsed.
+- **Pinned:** `ghcr.io/seud0nym/sigenergy2mqtt:2026.7.4@sha256:5e632aa39fac352ef23a148d6274a29e43886e2d2093fe942820c3fcae290ce9`
+  (PyModbus **3.13.1**, revision `b2cd5eda…`).
+- **Compose extras:** `TZ`, `SIGENERGY2MQTT_MQTT_BROKER=mosquitto`,
+  `SIGENERGY2MQTT_MQTT_ANONYMOUS=true` (persistence MQTT connects before YAML
+  load; without the env broker it hits `127.0.0.1` and marks health degraded).
+- **Config:** `modbus[].log-skipped: true` for transport verification.
+- **Remote backup:** `/home/halil/workspace/energy-stack-backups/sigenergy2mqtt-20260730-211503/`.
+- **Verified ~21:20 CEST:** container **healthy**, restarts=0, Modbus Protocol
+  V2.8, zero ERROR/WARNING in first ~4 min, HA master/control on, Remote EMS
+  on, mode `Command Discharging`, limits `0.0`/`0.9` kW written successfully
+  via registers 40031/40032/40034. SOC updating (~18.8%).
+- Still a **partial** mitigation of Sigenergy stale-frame behavior (#207 can
+  still occur). Watch overnight command-mode dwell; set `log-skipped: false`
+  once quiet if log noise is unwanted. Do not change `soc_final` first.
+
+## Jul 30 low peak SOC / no arbitrage — execution failure diagnosed, transport cause narrowed
+
+- Jul 30 peak SOC was **39.4% at 13:45 CEST**, versus roughly 94–97% on
+  Jul 23–28. The MPC was healthy and planned multi-kW grid charging; HA master,
+  freshness, control, optimization, and recovery gates were all correct.
+- Execution failed below HA policy: all 105 command-mode intervals lasted at
+  most about two seconds, and the plant spent 99.1% of the day in native
+  `Maximum Self-consumption`. At 12:00:43, for example, HA requested Command
+  Charging and 5.4/0.0 kW limits, but the mode returned to native in 128 ms and
+  limits returned to 8.8/9.0 kW.
+- Live `ha_sigen_ems.yaml` matches the rendered repository package. Remote EMS
+  register 40029 remained enabled, `optim_status` stayed `Optimal`, and no
+  charge-branch HA path calls `sigen_restore_native_control`. This excludes
+  `soc_final`, deadband/native policy, package drift, master-off enforcement,
+  recovery, and bad/stale-plan fallback as the cause of today's miss.
+- Root transport: Sigenergy can resend the preceding Modbus response (issue
+  #100). Old bridge on PyModbus 3.13.0 could discard the valid frame when a
+  stale/wrong-ID reply shared the TCP buffer (fixed in 3.13.1 / PR #2934).
+- Upgraded to 2026.7.4 as the planned controlled pin (see above).
 
 ## Bounded Load-Gap Degraded Mode — DEPLOYED (2026-07-29)
 

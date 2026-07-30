@@ -10,6 +10,8 @@ modbus:
     port: 502
     # Inverter Modbus device ID from the installer (usually 1). Not the old plant slave 247.
     inverters: [1]
+    # true during Modbus transport verification (stale/wrong-ID frames); set false once quiet.
+    log-skipped: true
 
 mqtt:
   broker: mosquitto

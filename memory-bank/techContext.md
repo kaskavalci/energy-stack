@@ -15,7 +15,7 @@
 | `emhass` | LP optimizer, Open-Meteo, publish-data `:5000` |
 | `emhass-cron` | `fetch_prices_emhass.py` |
 | `energy-monitor` | `health_notify.py` every 10 min |
-| `mosquitto`, `mqtt4dsmr`, `sigenergy2mqtt` | MQTT bridges |
+| `mosquitto`, `mqtt4dsmr`, `sigenergy2mqtt` | MQTT bridges (`sigenergy2mqtt` pinned tag+digest like EMHASS; MQTT broker via env for early persistence) |
 
 HA itself runs on the **HA host** via [`home-assistant/docker-compose.yml`](../home-assistant/docker-compose.yml) (`ghcr.io/home-assistant/home-assistant:stable`, `network_mode: host`), not on the energy host.
 
