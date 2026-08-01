@@ -2094,6 +2094,86 @@ class ResolveSocFinalTests(unittest.TestCase):
         )
 
 
+class EnsureWeatherSoftRefreshTests(unittest.TestCase):
+    def test_ensure_clears_on_soft_refresh_reason_posts_hard(self):
+        share = Path(tempfile.mkdtemp())
+        try:
+            with ExitStack() as stack:
+                stack.enter_context(
+                    patch.object(
+                        fetch_prices_emhass,
+                        "weather_cache_refresh_reason",
+                        side_effect=["soft age", None],
+                    )
+                )
+                stack.enter_context(
+                    patch.object(
+                        fetch_prices_emhass,
+                        "weather_cache_stale_reason",
+                        return_value=None,
+                    )
+                )
+                clear = stack.enter_context(
+                    patch.object(fetch_prices_emhass, "clear_weather_cache_files")
+                )
+                stack.enter_context(
+                    patch.object(
+                        fetch_prices_emhass,
+                        "call_emhass_action_with_retry",
+                        return_value=None,
+                    )
+                )
+                fetch_prices_emhass.ensure_weather_forecast_cache(
+                    "http://emhass:5000",
+                    share,
+                    32,
+                    force=False,
+                )
+                clear.assert_called_once()
+        finally:
+            import shutil
+
+            shutil.rmtree(share, ignore_errors=True)
+
+    def test_ensure_does_not_raise_when_hard_ok(self):
+        share = Path(tempfile.mkdtemp())
+        try:
+            with ExitStack() as stack:
+                stack.enter_context(
+                    patch.object(
+                        fetch_prices_emhass,
+                        "weather_cache_refresh_reason",
+                        return_value=None,
+                    )
+                )
+                stack.enter_context(
+                    patch.object(
+                        fetch_prices_emhass,
+                        "weather_cache_stale_reason",
+                        return_value=None,
+                    )
+                )
+                stack.enter_context(
+                    patch.object(fetch_prices_emhass, "clear_weather_cache_files")
+                )
+                stack.enter_context(
+                    patch.object(
+                        fetch_prices_emhass,
+                        "call_emhass_action_with_retry",
+                        return_value=None,
+                    )
+                )
+                fetch_prices_emhass.ensure_weather_forecast_cache(
+                    "http://emhass:5000",
+                    share,
+                    32,
+                )
+        finally:
+            import shutil
+
+            shutil.rmtree(share, ignore_errors=True)
+
+
 class NaiveMpcPayloadTests(unittest.TestCase):
     def test_payload_uses_configured_native_load_forecast(self):
         payload = fetch_prices_emhass.build_naive_mpc_payload(

@@ -29,6 +29,7 @@ from weather_cache_stale import (
     docker_available,
     read_optimization_time_step_min,
     validate_cache_max_age_config,
+    weather_cache_refresh_reason,
     weather_cache_stale_reason,
 )
 
@@ -1087,7 +1088,7 @@ def ensure_weather_forecast_cache(
     cache_timeout: float = 120,
     force: bool = False,
 ) -> None:
-    reason = weather_cache_stale_reason(share_dir, prediction_horizon, force=force)
+    reason = weather_cache_refresh_reason(share_dir, prediction_horizon, force=force)
     if reason:
         logging.info("Weather cache refresh needed (%s)", reason)
         clear_weather_cache_files()
@@ -1437,7 +1438,7 @@ def main() -> int:
         horizon = read_prediction_horizon_from_config(args.share_dir)
         force = args.force_weather
         if not force:
-            stale = weather_cache_stale_reason(args.share_dir, horizon, force=False)
+            stale = weather_cache_refresh_reason(args.share_dir, horizon, force=False)
             if stale is None:
                 if not docker_available():
                     stale = "docker socket unavailable"
