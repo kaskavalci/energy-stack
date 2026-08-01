@@ -51,6 +51,14 @@ class EmhassConfigExampleTests(unittest.TestCase):
         )
         self.assertFalse(config["set_zero_min"])
 
+    def test_open_meteo_cache_max_age_is_150(self):
+        config = json.loads(
+            (REPO_ROOT / "emhass/share/config.json.example").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(config["open_meteo_cache_max_age"], 150)
+
 
 class NativeLoadHistoryValidationTests(unittest.TestCase):
     def setUp(self):

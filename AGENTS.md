@@ -63,7 +63,7 @@ HA deploy uses **additive merge** (`scripts/lib/ha_config_merge.py`) — only up
 
 - `optimization_time_step`: **30** min; `prediction_horizon`: **32** max
 - Price methods: **csv**; weather: **open-meteo**
-- `open_meteo_cache_max_age`: **120** min — must stay **>** MPC cadence (30 min)
+- `open_meteo_cache_max_age`: **150** min — must stay **>** MPC cadence (30 min); cron soft refresh at `max_age − 2×step` (90 with defaults)
 - Price fetch failure → **abort MPC** (no stale-CSV fallback)
 - Weather retry → `clear_weather_cache_files()` before EMHASS `weather-forecast-cache`
 - Shared stale logic: `lib/weather_cache_stale.py` (cron + monitor)

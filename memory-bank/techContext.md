@@ -23,7 +23,7 @@ HA itself runs on the **HA host** via [`home-assistant/docker-compose.yml`](../h
 
 - `optimization_time_step`: **30** min; `prediction_horizon`: **32** max
 - Price methods: **csv**; weather: **open-meteo**
-- `open_meteo_cache_max_age`: **120** min — must stay **>** MPC cadence
+- `open_meteo_cache_max_age`: **150** min — must stay **>** MPC cadence; cron soft clear at `max_age − 2×step` (90 with defaults)
 - Price fetch failure → **abort MPC**
 - Native load history is healthy with complete coverage and degraded only for
   one fully bracketed interior gap of at most six consecutive 30-minute bins

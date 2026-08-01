@@ -1,7 +1,12 @@
 # Active Context
 
-**Last updated:** 2026-07-30 ~21:50 CEST
+**Last updated:** 2026-08-01
 **Author:** Auto
+
+## Open-Meteo soft refresh — implemented locally (2026-08-01)
+
+- Example config and agent invariants now use `open_meteo_cache_max_age` **150**; cron clears cache at soft age `max_age − 2×step` (90 min with defaults). Hard B5/fail unchanged at 150.
+- **Operator deploy:** `./scripts/deploy-energy-stack.sh` then confirm `open_meteo_cache_max_age` is 150 in `share/config.json` on energy host.
 
 ## Floating `:latest` for EMHASS + sigenergy2mqtt — DEPLOYED (2026-07-30 ~21:49 CEST)
 

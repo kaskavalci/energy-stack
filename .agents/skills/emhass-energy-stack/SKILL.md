@@ -64,13 +64,13 @@ ssh "${ENERGY_REMOTE_HOST}" "docker compose -f ${ENERGY_REMOTE_DIR}/docker-compo
 | `optimization_time_step` | **30** |
 | `load_cost_forecast_method` / `production_price_forecast_method` | **csv** |
 | `weather_forecast_method` | **open-meteo** |
-| `open_meteo_cache_max_age` | **120** min — must stay **>** `optimization_time_step` (30) |
+| `open_meteo_cache_max_age` | **150** min — must stay **>** `optimization_time_step` (30); hard B5/fail at this age |
 
 ---
 
 ## Pitfalls / invariants
 
-1. **`open_meteo_cache_max_age` > MPC cadence** — if equal to 30 min, JSON age trips at every `:30` boundary and MPC fails.
+1. **`open_meteo_cache_max_age` > MPC cadence** — if equal to 30 min, JSON age trips at every `:30` boundary and MPC fails. Soft proactive refresh clears cache at `max_age − 2×step` (90 min with defaults); hard stale/B5 still uses `open_meteo_cache_max_age` (150).
 2. **Force refetch = delete cache files** — EMHASS `weather-forecast-cache` is a no-op while cache files exist. Cron uses `clear_weather_cache_files()` before retry.
 3. **Weather failure → one push** — monitor **B4** only; **B2_mpc** / **B2_weather** suppressed when B4 fires.
 4. **Shared stale rules** — `lib/weather_cache_stale.py` used by cron and monitor.
