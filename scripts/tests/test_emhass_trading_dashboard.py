@@ -323,13 +323,13 @@ class NativePvPanelTests(unittest.TestCase):
         self.assertEqual(graph.get("days_to_show"), 7)
         self.assertEqual(graph.get("period"), "day")
         self.assertEqual(graph.get("chart_type"), "bar")
-        self.assertEqual(graph.get("stat_types"), ["mean"])
+        self.assertEqual(graph.get("stat_types"), ["state"])
         entities = graph.get("entities")
         self.assertIsInstance(entities, list)
         self.assertEqual(len(entities), 1)
         self.assertEqual(
             entities[0].get("entity"),
-            "sensor.emhass_net_electricity_profit_daily",
+            "sensor.emhass_net_electricity_profit_today",
         )
         self.assertEqual(entities[0].get("name"), "Net profit (EUR)")
 

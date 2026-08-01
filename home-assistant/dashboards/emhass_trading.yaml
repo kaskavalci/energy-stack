@@ -44,9 +44,9 @@ views:
         period: day
         chart_type: bar
         stat_types:
-          - mean
+          - state
         entities:
-          - entity: sensor.emhass_net_electricity_profit_daily
+          - entity: sensor.emhass_net_electricity_profit_today
             name: Net profit (EUR)
 
       - type: entities

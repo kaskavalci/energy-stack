@@ -3,17 +3,31 @@
 **Last updated:** 2026-08-01
 **Author:** Auto
 
-## 7-day net electricity profit graph — repo-ready (2026-08-01)
+## 7-day net electricity profit graph — repo-ready, corrected post-review (2026-08-01)
 
-**Author:** Auto / Composer
+**Author:** Auto / Claude
 
-Implemented per spec `docs/superpowers/specs/2026-08-01-emhass-7d-net-profit-graph-design.md` on branch `feature/emhass-7d-net-profit-graph`:
+Operator decision **overrode** the original 23:55-snapshot plan/spec after
+review. Implemented per revised spec
+`docs/superpowers/specs/2026-08-01-emhass-7d-net-profit-graph-design.md` on
+branch `feature/emhass-7d-net-profit-graph`:
 
-- **Task 1:** structural tests for daily snapshot sensor + dashboard card
-- **Task 2:** `sensor.emhass_net_electricity_profit_daily` — trigger 23:55, skip on bad sources, attrs `for_date`/`production`/`delivery`
-- **Task 3:** native `statistics-graph` bar card `Net electricity profit — last 7 days` under Prices (today/month unchanged)
+- **No new sensor.** `sensor.emhass_net_electricity_profit_daily` (23:55
+  trigger snapshot) was **removed** — never deployed, repo-only.
+- `sensor.emhass_net_electricity_profit_today` (existing, continuous,
+  production − delivery) changed `state_class: measurement` →
+  **`total`** (not `total_increasing` — net profit can decrease intraday).
+- Dashboard `statistics-graph` "Net electricity profit — last 7 days" now
+  reads that **today** sensor with `stat_types: [state]` (not `mean`).
+  Closed-day bar = last recorded value that calendar day ≈ EOD P/L; today's
+  bar = latest value so far = live P/L. `days_to_show: 7`, `period: day`,
+  `chart_type: bar` unchanged.
+- Month sensor (`sensor.emhass_net_electricity_profit_month`) untouched —
+  still `measurement`.
 
-**Not live-verified** until HA deploy and first 23:55 snapshot. Graph is forward-only (no backfill); empty until first successful daily write.
+**Not live-verified** until HA deploy. Unlike the rejected snapshot approach,
+there is no forward-only/backfill gap concern — the graph reads existing
+continuous history the moment `state_class: total` is deployed.
 
 **Operator deploy:**
 
@@ -22,10 +36,10 @@ source scripts/lib/source-site-env.sh
 ./scripts/deploy-home-assistant.sh
 ```
 
-**Post-deploy live checks (next calendar evening after 23:55):**
+**Post-deploy live checks:**
 
-1. `sensor.emhass_net_electricity_profit_daily` is numeric; `for_date` is today's date.
-2. Trading view shows ≥1 bar on `Net electricity profit — last 7 days`.
+1. `sensor.emhass_net_electricity_profit_today` has `state_class: total` (Developer Tools → States → Attributes).
+2. Trading view shows a live-moving bar for today and, after the next midnight boundary, a closed bar for the prior day at its EOD value.
 3. Master/control behavior unchanged (display-only change).
 
 ## Open-Meteo soft refresh — implemented locally (2026-08-01)

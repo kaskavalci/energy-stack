@@ -165,7 +165,7 @@ class EmhassNetElectricityProfitTests(unittest.TestCase):
         self.assertIn("default_entity_id: sensor.emhass_net_electricity_profit_today", today)
         self.assertIn("unit_of_measurement: EUR", today)
         self.assertIn("device_class: monetary", today)
-        self.assertIn("state_class: measurement", today)
+        self.assertIn("state_class: total", today)
         self.assertIn(
             "sensor.zonneplan_electricity_production_costs_today", today
         )
@@ -181,7 +181,7 @@ class EmhassNetElectricityProfitTests(unittest.TestCase):
     def test_month_profit_is_production_minus_delivery(self) -> None:
         month = self._sensor_block(
             "EMHASS net electricity profit month",
-            "EMHASS net electricity profit daily",
+            "EMHASS recovery target SOC",
         )
         self.assertIn("default_entity_id: sensor.emhass_net_electricity_profit_month", month)
         self.assertIn(
@@ -193,41 +193,6 @@ class EmhassNetElectricityProfitTests(unittest.TestCase):
         self.assertIn("production - delivery", month)
         self.assertIn("unknown", month)
         self.assertNotIn("excl_tax", month)
-
-    def test_daily_profit_snapshot_contract(self) -> None:
-        package = self.dashboard
-        self.assertIn("EMHASS net electricity profit daily", package)
-        self.assertIn(
-            "default_entity_id: sensor.emhass_net_electricity_profit_daily",
-            package,
-        )
-        daily = self._sensor_block(
-            "EMHASS net electricity profit daily",
-            "EMHASS recovery target SOC",
-        )
-        self.assertIn('at: "23:55:00"', package)
-        # Trigger block must sit above the daily sensor name in the file.
-        trigger_idx = package.index('at: "23:55:00"')
-        name_idx = package.index("EMHASS net electricity profit daily")
-        self.assertLess(trigger_idx, name_idx)
-        self.assertIn("unit_of_measurement: EUR", daily)
-        self.assertIn("device_class: monetary", daily)
-        self.assertIn("state_class: measurement", daily)
-        self.assertIn(
-            "sensor.zonneplan_electricity_production_costs_today", daily
-        )
-        self.assertIn(
-            "sensor.zonneplan_electricity_delivery_costs_today", daily
-        )
-        self.assertIn("production - delivery", daily)
-        self.assertIn("for_date:", daily)
-        self.assertIn("production:", daily)
-        self.assertIn("delivery:", daily)
-        self.assertNotIn("excl_tax", daily)
-        # Skip write when sources bad: template condition (not overwrite with unknown/0).
-        condition_region = package[trigger_idx:name_idx]
-        self.assertIn("condition:", condition_region)
-        self.assertIn("float(none) is not none", condition_region)
 
 
 class EmhassMpcFreshnessContractTests(unittest.TestCase):

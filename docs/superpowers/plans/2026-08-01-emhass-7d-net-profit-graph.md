@@ -2,6 +2,17 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Post-review correction (2026-08-01, operator decision — binds over this plan):**
+> the 23:55 trigger-based `sensor.emhass_net_electricity_profit_daily` snapshot
+> described below (Tasks 2–3) was **rejected**. The shipped approach instead
+> changes the existing `sensor.emhass_net_electricity_profit_today` to
+> `state_class: total` and points the 7-day `statistics-graph` at that sensor
+> with `stat_types: [state]` — no new sensor, no time trigger, no skip-on-bad
+> condition. See the revised
+> `docs/superpowers/specs/2026-08-01-emhass-7d-net-profit-graph-design.md` for
+> the current contract. The task breakdown, file map, and code snippets below
+> are kept for history but do **not** reflect what is deployed.
+
 **Goal:** Add a daily net electricity profit snapshot sensor and a last-7-days bar chart on the EMHASS trading dashboard.
 
 **Architecture:** A trigger-based template sensor fires at 23:55 local time, records `production − delivery` from Zonneplan today cost sensors when both are numeric (condition skips the write otherwise), and a native `statistics-graph` bar card reads that sensor’s daily statistics.

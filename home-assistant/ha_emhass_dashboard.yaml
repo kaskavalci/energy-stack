@@ -126,7 +126,7 @@ template:
         default_entity_id: sensor.emhass_net_electricity_profit_today
         unit_of_measurement: EUR
         device_class: monetary
-        state_class: measurement
+        state_class: total
         icon: mdi:cash-plus
         state: >
           {% set production = states('sensor.zonneplan_electricity_production_costs_today') | float(none) %}
@@ -163,34 +163,6 @@ template:
           delivery: >
             {{ states('sensor.zonneplan_electricity_delivery_costs_this_month') | float(none) }}
 
-  - trigger:
-      - platform: time
-        at: "23:55:00"
-    condition:
-      - condition: template
-        value_template: >
-          {{ states('sensor.zonneplan_electricity_production_costs_today') | float(none) is not none
-             and states('sensor.zonneplan_electricity_delivery_costs_today') | float(none) is not none }}
-    sensor:
-      - name: EMHASS net electricity profit daily
-        unique_id: emhass_net_electricity_profit_daily
-        default_entity_id: sensor.emhass_net_electricity_profit_daily
-        unit_of_measurement: EUR
-        device_class: monetary
-        state_class: measurement
-        icon: mdi:cash-plus
-        state: >
-          {% set production = states('sensor.zonneplan_electricity_production_costs_today') | float(none) %}
-          {% set delivery = states('sensor.zonneplan_electricity_delivery_costs_today') | float(none) %}
-          {{ (production - delivery) | round(2) }}
-        attributes:
-          for_date: "{{ now().strftime('%Y-%m-%d') }}"
-          production: >
-            {{ states('sensor.zonneplan_electricity_production_costs_today') | float(none) }}
-          delivery: >
-            {{ states('sensor.zonneplan_electricity_delivery_costs_today') | float(none) }}
-
-  - sensor:
       - name: EMHASS recovery target SOC
         unique_id: emhass_recovery_target_soc
         default_entity_id: sensor.emhass_recovery_target_soc
