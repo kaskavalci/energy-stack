@@ -2103,7 +2103,7 @@ class ResolveSocFinalTests(unittest.TestCase):
 
 
 class EnsureWeatherSoftRefreshTests(unittest.TestCase):
-    def test_ensure_clears_on_soft_refresh_reason_posts_hard(self):
+    def test_ensure_clears_soft_reason_and_accepts_hard_post_check(self):
         share = Path(tempfile.mkdtemp())
         try:
             with ExitStack() as stack:
@@ -2111,7 +2111,7 @@ class EnsureWeatherSoftRefreshTests(unittest.TestCase):
                     patch.object(
                         fetch_prices_emhass,
                         "weather_cache_refresh_reason",
-                        side_effect=["soft age", None],
+                        return_value="soft age",
                     )
                 )
                 stack.enter_context(

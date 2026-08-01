@@ -1438,15 +1438,17 @@ def main() -> int:
         horizon = read_prediction_horizon_from_config(args.share_dir)
         force = args.force_weather
         if not force:
-            stale = weather_cache_refresh_reason(args.share_dir, horizon, force=False)
-            if stale is None:
+            refresh_reason = weather_cache_refresh_reason(
+                args.share_dir, horizon, force=False
+            )
+            if refresh_reason is None:
                 if not docker_available():
-                    stale = "docker socket unavailable"
+                    refresh_reason = "docker socket unavailable"
                 else:
                     logging.info("refresh-weather: cache OK, skipping EMHASS call")
                     write_run_status(args.share_dir, "weather", ok=True)
                     return 0
-            logging.info("refresh-weather: cache stale (%s)", stale)
+            logging.info("refresh-weather: refresh needed (%s)", refresh_reason)
         try:
             ensure_weather_forecast_cache(
                 args.emhass_base,

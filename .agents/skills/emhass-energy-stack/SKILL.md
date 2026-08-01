@@ -72,10 +72,11 @@ ssh "${ENERGY_REMOTE_HOST}" "docker compose -f ${ENERGY_REMOTE_DIR}/docker-compo
 
 1. **`open_meteo_cache_max_age` > MPC cadence** — if equal to 30 min, JSON age trips at every `:30` boundary and MPC fails. Soft proactive refresh clears cache at `max_age − 2×step` (90 min with defaults); hard stale/B5 still uses `open_meteo_cache_max_age` (150).
 2. **Force refetch = delete cache files** — EMHASS `weather-forecast-cache` is a no-op while cache files exist. Cron uses `clear_weather_cache_files()` before retry.
-3. **Weather failure → one push** — monitor **B4** only; **B2_mpc** / **B2_weather** suppressed when B4 fires.
-4. **Shared stale rules** — `lib/weather_cache_stale.py` used by cron and monitor.
-5. **B5_cache / B5_zero_fill** — sustained-failure gate (`ALERT_FAILURE_THRESHOLD=2`).
-6. **Price fetch fails → MPC aborted** — no stale-CSV fallback.
+3. **Soft clear trades availability for freshness** — it deletes JSON + pkl before refetch, so an Open-Meteo blip at soft age can abort MPC even below the hard limit.
+4. **Weather failure → one push** — monitor **B4** only; **B2_mpc** / **B2_weather** suppressed when B4 fires.
+5. **Shared stale rules** — `lib/weather_cache_stale.py` used by cron and monitor.
+6. **B5_cache / B5_zero_fill** — sustained-failure gate (`ALERT_FAILURE_THRESHOLD=2`).
+7. **Price fetch fails → MPC aborted** — no stale-CSV fallback.
 
 ---
 
