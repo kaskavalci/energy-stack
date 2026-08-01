@@ -38,6 +38,17 @@ views:
           - entity: sensor.emhass_net_electricity_profit_month
             name: Net profit this month
 
+      - type: statistics-graph
+        title: Net electricity profit — last 7 days
+        days_to_show: 7
+        period: day
+        chart_type: bar
+        stat_types:
+          - mean
+        entities:
+          - entity: sensor.emhass_net_electricity_profit_daily
+            name: Net profit (EUR)
+
       - type: entities
         title: Actual (Sigen / P1)
         entities:
