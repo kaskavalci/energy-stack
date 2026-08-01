@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 
 WEATHER_PKL = "/data/weather_forecast_data.pkl"
 OPEN_METEO_JSON = "/data/cached-open-meteo-forecast-b.json"
-DEFAULT_OPEN_METEO_CACHE_MAX_AGE_MIN = 120
+DEFAULT_OPEN_METEO_CACHE_MAX_AGE_MIN = 150
 DEFAULT_OPTIMIZATION_TIME_STEP_MIN = 30
 DEFAULT_PREDICTION_HORIZON = 48
 
@@ -68,6 +68,13 @@ def read_prediction_horizon_steps(share_dir: Path) -> int:
     return horizon if horizon > 0 else DEFAULT_PREDICTION_HORIZON
 
 
+def read_open_meteo_refresh_age_min(share_dir: Path) -> int:
+    """Soft clear/refetch age: max_age - 2 * optimization_time_step."""
+    max_age = read_open_meteo_cache_max_age_min(share_dir)
+    step = read_optimization_time_step_min(share_dir)
+    return max_age - (2 * step)
+
+
 def validate_cache_max_age_config(share_dir: Path) -> str | None:
     """Return error when open_meteo_cache_max_age is not greater than MPC cadence."""
     max_age = read_open_meteo_cache_max_age_min(share_dir)
@@ -76,6 +83,12 @@ def validate_cache_max_age_config(share_dir: Path) -> str | None:
         return (
             f"open_meteo_cache_max_age ({max_age} min) must be > "
             f"optimization_time_step ({step} min)"
+        )
+    refresh_age = max_age - (2 * step)
+    if refresh_age <= step:
+        return (
+            f"open_meteo refresh age ({refresh_age} min = max_age - 2*step) "
+            f"must be > optimization_time_step ({step} min)"
         )
     return None
 
@@ -147,6 +160,60 @@ def open_meteo_json_age_min() -> float | None:
     return (datetime.now().timestamp() - mtime) / 60.0
 
 
+def _weather_cache_bounds_reason(
+    share_dir: Path,
+    prediction_horizon: int,
+) -> tuple[str | None, datetime | None]:
+    """Return (bounds error, cache_end). cache_end is None when pkl is missing."""
+    tz = tzinfo()
+    step_min = read_optimization_time_step_min(share_dir)
+    if config_err := validate_cache_max_age_config(share_dir):
+        logging.error("Weather cache config invalid: %s", config_err)
+    need_until = datetime.now(tz) + timedelta(minutes=prediction_horizon * step_min)
+    cache_start, cache_end = inspect_weather_cache_bounds()
+    if cache_end is None:
+        return "weather_forecast_data.pkl missing or unreadable", None
+    if cache_end < need_until:
+        return (
+            f"cache ends {cache_end.isoformat()} before MPC window "
+            f"{need_until.isoformat()}"
+        ), cache_end
+    need_from = current_mpc_slot_start(step_min, tz) - timedelta(minutes=step_min)
+    if cache_start and cache_start < need_from:
+        return (
+            f"cache starts {cache_start.isoformat()} before previous MPC slot "
+            f"{need_from.isoformat()}"
+        ), cache_end
+    return None, cache_end
+
+
+def weather_cache_refresh_reason(
+    share_dir: Path,
+    prediction_horizon: int,
+    *,
+    force: bool = False,
+) -> str | None:
+    if force:
+        return "forced refresh"
+    if not docker_available():
+        logging.warning("Docker socket unavailable; cannot verify Open-Meteo cache files")
+        return None
+    bounds_reason, cache_end = _weather_cache_bounds_reason(share_dir, prediction_horizon)
+    if bounds_reason:
+        return bounds_reason
+    refresh_age = read_open_meteo_refresh_age_min(share_dir)
+    max_age = read_open_meteo_cache_max_age_min(share_dir)
+    json_age = open_meteo_json_age_min()
+    if json_age is not None and json_age >= refresh_age:
+        return (
+            f"Open-Meteo JSON is {json_age:.0f} min old "
+            f"(refresh at {refresh_age} min; hard limit {max_age} min)"
+        )
+    if cache_end and cache_end < datetime.now(tzinfo()):
+        return f"cache ends in the past ({cache_end.isoformat()})"
+    return None
+
+
 def weather_cache_stale_reason(
     share_dir: Path,
     prediction_horizon: int,
@@ -158,31 +225,15 @@ def weather_cache_stale_reason(
     if not docker_available():
         logging.warning("Docker socket unavailable; cannot verify Open-Meteo cache files")
         return None
-    tz = tzinfo()
-    step_min = read_optimization_time_step_min(share_dir)
-    if config_err := validate_cache_max_age_config(share_dir):
-        logging.error("Weather cache config invalid: %s", config_err)
-    need_until = datetime.now(tz) + timedelta(minutes=prediction_horizon * step_min)
-    cache_start, cache_end = inspect_weather_cache_bounds()
-    if cache_end is None:
-        return "weather_forecast_data.pkl missing or unreadable"
-    if cache_end < need_until:
-        return (
-            f"cache ends {cache_end.isoformat()} before MPC window "
-            f"{need_until.isoformat()}"
-        )
-    need_from = current_mpc_slot_start(step_min, tz) - timedelta(minutes=step_min)
-    if cache_start and cache_start < need_from:
-        return (
-            f"cache starts {cache_start.isoformat()} before previous MPC slot "
-            f"{need_from.isoformat()}"
-        )
+    bounds_reason, cache_end = _weather_cache_bounds_reason(share_dir, prediction_horizon)
+    if bounds_reason:
+        return bounds_reason
     max_age = read_open_meteo_cache_max_age_min(share_dir)
     json_age = open_meteo_json_age_min()
     # >= avoids pass-then-fail race when age crosses max_age between checks.
     if json_age is not None and json_age >= max_age:
         return f"Open-Meteo JSON is {json_age:.0f} min old (limit {max_age} min)"
-    if cache_end < datetime.now(tz):
+    if cache_end and cache_end < datetime.now(tzinfo()):
         return f"cache ends in the past ({cache_end.isoformat()})"
     return None
 
