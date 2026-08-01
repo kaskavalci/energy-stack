@@ -3,6 +3,31 @@
 **Last updated:** 2026-08-01
 **Author:** Auto
 
+## 7-day net electricity profit graph — repo-ready (2026-08-01)
+
+**Author:** Auto / Composer
+
+Implemented per spec `docs/superpowers/specs/2026-08-01-emhass-7d-net-profit-graph-design.md` on branch `feature/emhass-7d-net-profit-graph`:
+
+- **Task 1:** structural tests for daily snapshot sensor + dashboard card
+- **Task 2:** `sensor.emhass_net_electricity_profit_daily` — trigger 23:55, skip on bad sources, attrs `for_date`/`production`/`delivery`
+- **Task 3:** native `statistics-graph` bar card `Net electricity profit — last 7 days` under Prices (today/month unchanged)
+
+**Not live-verified** until HA deploy and first 23:55 snapshot. Graph is forward-only (no backfill); empty until first successful daily write.
+
+**Operator deploy:**
+
+```bash
+source scripts/lib/source-site-env.sh
+./scripts/deploy-home-assistant.sh
+```
+
+**Post-deploy live checks (next calendar evening after 23:55):**
+
+1. `sensor.emhass_net_electricity_profit_daily` is numeric; `for_date` is today's date.
+2. Trading view shows ≥1 bar on `Net electricity profit — last 7 days`.
+3. Master/control behavior unchanged (display-only change).
+
 ## Open-Meteo soft refresh — implemented locally (2026-08-01)
 
 - Example config and agent invariants now use `open_meteo_cache_max_age` **150**; cron clears cache at soft age `max_age − 2×step` (90 min with defaults). Hard B5/fail unchanged at 150.
