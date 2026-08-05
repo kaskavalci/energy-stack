@@ -1,14 +1,40 @@
 # Active Context
 
-**Last updated:** 2026-08-01
+**Last updated:** 2026-08-05
 **Author:** Auto
 
-## Open-Meteo soft refresh — implemented locally (2026-08-01)
+## Sigen diagnostics dashboard — in repo; not yet live-deployed
 
-- Example config and agent invariants now use `open_meteo_cache_max_age` **150**; cron clears cache at soft age `max_age − 2×step` (90 min with defaults). Hard B5/fail unchanged at 150.
-- **Operator deploy:** Before `./scripts/deploy-energy-stack.sh`, edit the local
-  gitignored `emhass/share/config.json` to set `"open_meteo_cache_max_age": 150`;
-  after deploy, confirm 150 in `share/config.json` on the energy host.
+- Tasks 1–4 complete on `feature/sigen-diagnostics-dashboard`: package
+  `ha_sigen_diagnostics.yaml`, dashboard `dashboards/sigen_diagnostics.yaml`,
+  merge key `sigen-diagnostics`, deploy uploads wired.
+- Operator docs: [SETUP.md](../docs/SETUP.md) § Sigen diagnostics dashboard;
+  entity IDs in [ENTITY_CONTRACT.md](../docs/ENTITY_CONTRACT.md) § Sigen diagnostics.
+- **Task 6:** `./scripts/deploy-home-assistant.sh` to push live on Odroid HA.
+
+## MPC abort 14:30 CEST (2026-08-05) — load-sample freshness false positive (read-only)
+
+- Containers healthy; prices/weather OK. Only the **14:30** natural MPC failed.
+- `last_enever_run.json`: `mpc.ok=false`, `failure_kind=load_history`,
+  newest finite sample **10.0 min** old (max 5). Last success marker still
+  `2026-08-05 14:00:44`. Master **on**; `emhass_mpc_fresh` /
+  `emhass_control_allowed` **off** (`plan_stale`).
+- Root: `sensor.emhass_house_load_sample_w` sat at **0 W** for ~11 min
+  (`12:20`→`12:31` UTC / `14:20`→`14:31` CEST). HA recorder collapses unchanged
+  state, so history `last_changed` did not advance; fail-closed gate treated it
+  as stale. Underlying cause of the zero clamp: formula
+  `max(grid + pv − batt, 0)` while battery discharged ~**2.7 kW** (prior plan)
+  and grid+PV roughly cancelled it — not a P1/HA outage.
+- Sample sensor live again by ~14:55 (`sampled_at` current, non-zero). Next
+  natural **15:00** MPC should recover if samples keep changing. No code/deploy
+  done (read-only ask).
+
+## Open-Meteo soft refresh — DEPLOYED (2026-08-01 ~07:45 CEST)
+
+- Soft clear at `max_age − 2×step` (**90**); hard B5/fail at **150**.
+- Live `emhass/share/config.json` on energy host: `open_meteo_cache_max_age=150`.
+- Cron container reports hard=150, soft=90. `emhass`/`emhass-cron`/`energy-monitor` rebuilt+restarted.
+- Post-recreate weather cache was empty; `refresh-weather` ran to rebuild. Watch next natural MPC.
 
 ## Floating `:latest` for EMHASS + sigenergy2mqtt — DEPLOYED (2026-07-30 ~21:49 CEST)
 
