@@ -172,6 +172,7 @@ class SigenDiagnosticsDashboardTests(unittest.TestCase):
         graph = graphs[0]
         self.assertEqual(graph.get("days_to_show"), 7)
         self.assertEqual(graph.get("period"), "hour")
+        self.assertEqual(graph.get("chart_type"), "line")
         self.assertEqual(graph.get("stat_types"), ["mean"])
         entities = [
             e["entity"] if isinstance(e, Mapping) else e for e in graph["entities"]
@@ -193,6 +194,17 @@ class SigenDiagnosticsDashboardTests(unittest.TestCase):
         self.assertEqual(entities, BRIDGE_HISTORY_ENTITIES)
 
     def test_every_switch_and_select_is_simple_entity(self) -> None:
+        by_id = {r["entity"]: r for r in entity_rows(self.dashboard)}
+        for eid in (
+            "switch.__SIGEN_PLANT_SLUG___plant_remote_ems",
+            "select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode",
+        ):
+            self.assertIn(eid, by_id, msg=f"{eid} must be on dashboard")
+            self.assertEqual(
+                by_id[eid].get("type"),
+                "simple-entity",
+                msg=f"{eid} must be simple-entity",
+            )
         for row in entity_rows(self.dashboard):
             eid = str(row["entity"])
             if eid.startswith(("switch.", "select.")):
@@ -209,8 +221,27 @@ class SigenDiagnosticsDashboardTests(unittest.TestCase):
             self.assertNotIn("tap_action", row)
 
     def test_all_bridge_metrics_show_last_updated(self) -> None:
-        by_id = {r["entity"]: r for r in entity_rows(self.dashboard)}
+        bridge_metrics_cards = [
+            n
+            for n in iter_mappings(self.dashboard)
+            if n.get("type") == "entities"
+            and isinstance(n.get("entities"), list)
+            and "bridge metric" in str(n.get("title", "")).lower()
+        ]
+        self.assertEqual(
+            len(bridge_metrics_cards),
+            1,
+            msg="expected one Bridge metrics entities card",
+        )
+        card = bridge_metrics_cards[0]
+        by_id: dict[Any, Mapping[str, Any]] = {}
+        for item in card["entities"]:
+            if isinstance(item, Mapping) and "entity" in item:
+                by_id[item["entity"]] = item
+            elif isinstance(item, str):
+                by_id[item] = {"entity": item}
         for eid in BRIDGE_METRIC_ENTITIES:
+            self.assertIn(eid, by_id, msg=f"{eid} must be on Bridge metrics card")
             self.assertEqual(
                 by_id[eid].get("secondary_info"),
                 "last-updated",
