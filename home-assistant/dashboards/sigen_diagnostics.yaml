@@ -39,10 +39,15 @@ views:
         title: Bridge liveness
         entities:
           - entity: sensor.sigenergy2mqtt_health
+            secondary_info: last-updated
           - entity: binary_sensor.sigenergy2mqtt_mqtt_connected
+            secondary_info: last-updated
           - entity: binary_sensor.sigenergy2mqtt_modbus_connected
+            secondary_info: last-updated
           - entity: sensor.sigenergy2mqtt_overdue_topics
+            secondary_info: last-updated
           - entity: sensor.sigenergy2mqtt_health_timestamp
+            secondary_info: last-updated
 
       - type: entities
         title: Bridge metrics

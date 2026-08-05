@@ -24,6 +24,13 @@ HEALTH_ATTRIBUTES_FIXTURE = {
 }
 HEALTH_TIMESTAMP_ISO = "2026-08-05T18:45:34+00:00"
 HEALTH_EXPIRE_AFTER = 180
+BRIDGE_LIVENESS_ENTITIES = [
+    "sensor.sigenergy2mqtt_health",
+    "binary_sensor.sigenergy2mqtt_mqtt_connected",
+    "binary_sensor.sigenergy2mqtt_modbus_connected",
+    "sensor.sigenergy2mqtt_overdue_topics",
+    "sensor.sigenergy2mqtt_health_timestamp",
+]
 BRIDGE_METRIC_ENTITIES = [
     "sensor.sigenergy2mqtt_started",
     "sensor.sigenergy2mqtt_modbus_protocol",
@@ -250,14 +257,36 @@ class SigenDiagnosticsDashboardTests(unittest.TestCase):
 
     def test_health_entities_on_dashboard(self) -> None:
         ids = {r["entity"] for r in entity_rows(self.dashboard)}
-        for eid in (
-            "sensor.sigenergy2mqtt_health",
-            "binary_sensor.sigenergy2mqtt_mqtt_connected",
-            "binary_sensor.sigenergy2mqtt_modbus_connected",
-            "sensor.sigenergy2mqtt_overdue_topics",
-            "sensor.sigenergy2mqtt_health_timestamp",
-        ):
+        for eid in BRIDGE_LIVENESS_ENTITIES:
             self.assertIn(eid, ids)
+
+    def test_all_bridge_liveness_show_last_updated(self) -> None:
+        bridge_liveness_cards = [
+            n
+            for n in iter_mappings(self.dashboard)
+            if n.get("type") == "entities"
+            and isinstance(n.get("entities"), list)
+            and "bridge liveness" in str(n.get("title", "")).lower()
+        ]
+        self.assertEqual(
+            len(bridge_liveness_cards),
+            1,
+            msg="expected one Bridge liveness entities card",
+        )
+        card = bridge_liveness_cards[0]
+        by_id: dict[Any, Mapping[str, Any]] = {}
+        for item in card["entities"]:
+            if isinstance(item, Mapping) and "entity" in item:
+                by_id[item["entity"]] = item
+            elif isinstance(item, str):
+                by_id[item] = {"entity": item}
+        for eid in BRIDGE_LIVENESS_ENTITIES:
+            self.assertIn(eid, by_id, msg=f"{eid} must be on Bridge liveness card")
+            self.assertEqual(
+                by_id[eid].get("secondary_info"),
+                "last-updated",
+                msg=eid,
+            )
 
 
 if __name__ == "__main__":

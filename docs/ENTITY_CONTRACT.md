@@ -104,20 +104,29 @@ appear as Home Assistant entities with the IDs below (not under `sigen_0_`).
 These metric sensors currently have **no** `state_class` → dashboard history
 uses `history-graph`, not `statistics-graph`.
 
-### Bridge health (MQTT only today → new package entities)
+### Bridge health (deployed package entities)
 
 Live topics (2026-08-05): `sigenergy2mqtt/health/state`,
-`sigenergy2mqtt/health/attributes`. **Not** discovered into HA yet.
+`sigenergy2mqtt/health/attributes`. Exposed in HA via MQTT sensors in
+`ha_sigen_diagnostics.yaml` (energy-stack); dashboard card **Bridge liveness**
+shows `secondary_info: last-updated` on every row.
 
-| Planned entity | Source |
-|----------------|--------|
+| Entity | Source |
+|--------|--------|
 | `sensor.sigenergy2mqtt_health` | `sigenergy2mqtt/health/state` (`default_entity_id`, `expire_after: 180`) |
 | `binary_sensor.sigenergy2mqtt_mqtt_connected` | attributes `mqtt_connected` → ON/OFF payloads, `expire_after: 180` |
 | `binary_sensor.sigenergy2mqtt_modbus_connected` | attributes `modbus_connected` → ON/OFF payloads, `expire_after: 180` |
 | `sensor.sigenergy2mqtt_overdue_topics` | attributes `overdue_topics`, `expire_after: 180` |
 | `sensor.sigenergy2mqtt_health_timestamp` | attributes Unix epoch `timestamp`, `expire_after: 180` |
 
-Provided by planned package `ha_sigen_diagnostics.yaml` (energy-stack).
+On this site `monitored_topics` is currently **0**, so `overdue_topics` stays
+**0** vacuously — prefer **health state**, the **connected** binaries, and
+**health_timestamp** / **last-updated** for freshness.
+
+Retained MQTT health topics can replay on HA restart; `expire_after: 180`
+still applies **after** HA receives the message. Operators should watch
+**last-updated** and **health_timestamp**, not assume a replayed payload is
+live bridge traffic.
 
 ## Related repos
 
