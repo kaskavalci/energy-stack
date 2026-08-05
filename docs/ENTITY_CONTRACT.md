@@ -1,6 +1,7 @@
 # Entity and package contract (cross-repo)
 
-**Last updated:** 2026-07-26
+**Last updated:** 2026-08-05  
+**Author:** Cursor Grok 4.5
 
 EMHASS on the energy host and HA packages in this repo depend on stable entity IDs on Home Assistant. Some IDs are created by the **reterminal** repo (P1 MQTT aliases and daily helpers).
 
@@ -47,6 +48,76 @@ Package keys keep the `reterminal_emhass_*` prefix on live HA for zero-downtime 
 | `sensor.zonneplan_current_electricity_tariff` | HA HACS | emhass-cron price fetch |
 | `sensor.sigen_0_plant_battery_soc` | sigenergy2mqtt | MPC `soc_init` |
 | Envoy `sensor.envoy_*` | HA integration | PV truth (AC-coupled) |
+
+## Sigen diagnostics (verified 2026-08-05)
+
+Live Odroid HA dump + energy-host MQTT. Plant slug `sigen_0` from
+`SIGEN_PLANT_SLUG`. Design:
+[specs/2026-08-05-sigen-diagnostics-dashboard-design.md](superpowers/specs/2026-08-05-sigen-diagnostics-dashboard-design.md).
+
+### Plant / inverter (sigenergy2mqtt HA discovery)
+
+| Entity | Role |
+|--------|------|
+| `sensor.sigen_0_plant_battery_soc` | SOC |
+| `sensor.sigen_0_plant_battery_soh` | SOH |
+| `sensor.sigen_0_plant_battery_power` | Battery power |
+| `sensor.sigen_0_inverter_1_average_cell_temperature` | Avg cell °C (`state_class=measurement`, since-protocol V1.8) |
+| `sensor.sigen_0_inverter_1_max_battery_temperature` | Max battery °C |
+| `sensor.sigen_0_inverter_1_min_battery_temperature` | Min battery °C |
+| `sensor.sigen_0_inverter_1_temperature` | PCS °C |
+| `sensor.sigen_0_inverter_1_average_cell_voltage` | Avg cell V |
+| `sensor.sigen_0_inverter_1_available_battery_charge_energy` | Available charge kWh |
+| `sensor.sigen_0_inverter_1_available_battery_discharge_energy` | Available discharge kWh |
+| `switch.sigen_0_plant_remote_ems` | Remote EMS (dashboard: `simple-entity` only) |
+| `select.sigen_0_plant_remote_ems_control_mode` | EMS mode (dashboard: `simple-entity` only) |
+| `sensor.sigen_0_plant_grid_status` | Grid status |
+| `sensor.sigen_0_plant_grid_sensor_status` | Grid sensor status |
+| `sensor.sigen_0_plant_alarms` | Plant alarms (clear = `No Alarm`) |
+| `sensor.sigen_0_general_alarm_3` | Plant ESS alarms |
+| `sensor.sigen_0_general_alarm_4` | Plant gateway alarms |
+| `sensor.sigen_0_general_pcs_alarm` | Plant PCS alarms |
+| `sensor.sigen_0_inverter_1_alarm_3` | Inverter ESS alarms |
+| `sensor.sigen_0_inverter_1_alarm_4` | Inverter gateway alarms |
+| `sensor.sigen_0_inverter_1_pcs_alarm` | Inverter PCS alarms |
+
+### Bridge metrics (HA discovery → `sensor.sigenergy2mqtt_*`)
+
+Upstream MQTT topics are `sigenergy2mqtt/metrics/<name>`. On this site they
+appear as Home Assistant entities with the IDs below (not under `sigen_0_`).
+
+| Entity | MQTT topic (source) |
+|--------|---------------------|
+| `sensor.sigenergy2mqtt_started` | `sigenergy2mqtt/metrics/started` |
+| `sensor.sigenergy2mqtt_modbus_protocol` | `…/modbus_protocol` |
+| `sensor.sigenergy2mqtt_modbus_read_errors` | `…/modbus_read_errors` |
+| `sensor.sigenergy2mqtt_modbus_write_errors` | `…/modbus_write_errors` |
+| `sensor.sigenergy2mqtt_modbus_read_mean` | `…/modbus_read_mean` |
+| `sensor.sigenergy2mqtt_modbus_read_max` | `…/modbus_read_max` |
+| `sensor.sigenergy2mqtt_modbus_write_mean` | `…/modbus_write_mean` |
+| `sensor.sigenergy2mqtt_modbus_write_max` | `…/modbus_write_max` |
+| `sensor.sigenergy2mqtt_modbus_reads_sec` | `…/modbus_reads_sec` |
+| `sensor.sigenergy2mqtt_modbus_cache_hit_percentage` | `…/modbus_cache_hit_percentage` |
+| `sensor.sigenergy2mqtt_mqtt_publish_failures` | `…/mqtt_publish_failures` |
+| `sensor.sigenergy2mqtt_mqtt_physical_publish_percentage` | `…/mqtt_physical_publish_percentage` |
+
+These metric sensors currently have **no** `state_class` → dashboard history
+uses `history-graph`, not `statistics-graph`.
+
+### Bridge health (MQTT only today → new package entities)
+
+Live topics (2026-08-05): `sigenergy2mqtt/health/state`,
+`sigenergy2mqtt/health/attributes`. **Not** discovered into HA yet.
+
+| Planned entity | Source |
+|----------------|--------|
+| `sensor.sigenergy2mqtt_health` | `sigenergy2mqtt/health/state` |
+| `binary_sensor.sigenergy2mqtt_mqtt_connected` | attributes `mqtt_connected` |
+| `binary_sensor.sigenergy2mqtt_modbus_connected` | attributes `modbus_connected` |
+| `sensor.sigenergy2mqtt_overdue_topics` | attributes `overdue_topics` |
+| `sensor.sigenergy2mqtt_health_timestamp` | attributes `timestamp` |
+
+Provided by planned package `ha_sigen_diagnostics.yaml` (energy-stack).
 
 ## Related repos
 
