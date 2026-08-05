@@ -125,15 +125,27 @@ script must upload new files.
 
 | Metric | Entity (new MQTT sensors) | Notes |
 |--------|---------------------------|-------|
-| Health state | `sensor.sigenergy2mqtt_health` | state topic `sigenergy2mqtt/health/state` (`healthy` / `degraded`) |
-| MQTT connected | `binary_sensor.sigenergy2mqtt_mqtt_connected` | from `health/attributes` JSON `mqtt_connected` |
-| Modbus connected | `binary_sensor.sigenergy2mqtt_modbus_connected` | from `health/attributes` JSON `modbus_connected` |
-| Overdue topics | `sensor.sigenergy2mqtt_overdue_topics` | from attributes `overdue_topics` |
-| Health timestamp | `sensor.sigenergy2mqtt_health_timestamp` | from attributes `timestamp` (epoch → timestamp device class) |
+| Health state | `sensor.sigenergy2mqtt_health` | `state_topic` `sigenergy2mqtt/health/state`; `default_entity_id`; `expire_after: 180` |
+| MQTT connected | `binary_sensor.sigenergy2mqtt_mqtt_connected` | attributes JSON → `'ON'`/`'OFF'` with matching `payload_on`/`payload_off`; `expire_after: 180` |
+| Modbus connected | `binary_sensor.sigenergy2mqtt_modbus_connected` | same ON/OFF mapping; `expire_after: 180` |
+| Overdue topics | `sensor.sigenergy2mqtt_overdue_topics` | attributes `overdue_topics`; `expire_after: 180` |
+| Health timestamp | `sensor.sigenergy2mqtt_health_timestamp` | attributes `timestamp` Unix epoch int → `as_datetime`; `expire_after: 180` |
 
-Package `ha_sigen_diagnostics.yaml` defines these via MQTT platform sensors
-subscribed to the energy-host Mosquitto topics already verified live. HA must
-already have an MQTT integration to the same broker (true on this site).
+Package `ha_sigen_diagnostics.yaml` defines these via MQTT sensors. Use
+`default_entity_id` (not `object_id`). HA must already have an MQTT integration
+to the energy-host broker.
+
+**Freshness:** `expire_after: 180` seconds on every health entity. Live
+`sigenergy2mqtt` container healthcheck treats attributes timestamp older than
+**120s** as unhealthy (30s poll). After 180s without MQTT updates, HA state
+becomes `unavailable` — counters alone must not look “healthy.”
+
+**Timestamp payload:** Unix epoch integer. Live fixture (2026-08-05):
+`1785955534` → `2026-08-05T18:45:34+00:00`.
+
+**Operator reading:** if health is `unavailable`, ≠ `healthy`, either connected
+binary is `off`, overdue_topics > 0, or metric `last-updated` is stale, treat
+transport as bad **even when error counters are 0**.
 
 **Counters / latency** (existing discovered entities; each row
 `secondary_info: last-updated`):
@@ -150,10 +162,6 @@ already have an MQTT integration to the same broker (true on this site).
 | Modbus cache hit % | `sensor.sigenergy2mqtt_modbus_cache_hit_percentage` |
 | MQTT publish failures | `sensor.sigenergy2mqtt_mqtt_publish_failures` |
 | MQTT physical publish % | `sensor.sigenergy2mqtt_mqtt_physical_publish_percentage` |
-
-**Operator reading:** if health ≠ `healthy`, or either connected binary is `off`,
-or overdue_topics > 0, or health/metrics `last-updated` is stale relative to
-normal scan cadence, treat transport as bad **even when error counters are 0**.
 
 ### 4. History (exact cards)
 

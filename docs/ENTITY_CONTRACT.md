@@ -111,11 +111,11 @@ Live topics (2026-08-05): `sigenergy2mqtt/health/state`,
 
 | Planned entity | Source |
 |----------------|--------|
-| `sensor.sigenergy2mqtt_health` | `sigenergy2mqtt/health/state` |
-| `binary_sensor.sigenergy2mqtt_mqtt_connected` | attributes `mqtt_connected` |
-| `binary_sensor.sigenergy2mqtt_modbus_connected` | attributes `modbus_connected` |
-| `sensor.sigenergy2mqtt_overdue_topics` | attributes `overdue_topics` |
-| `sensor.sigenergy2mqtt_health_timestamp` | attributes `timestamp` |
+| `sensor.sigenergy2mqtt_health` | `sigenergy2mqtt/health/state` (`default_entity_id`, `expire_after: 180`) |
+| `binary_sensor.sigenergy2mqtt_mqtt_connected` | attributes `mqtt_connected` → ON/OFF payloads, `expire_after: 180` |
+| `binary_sensor.sigenergy2mqtt_modbus_connected` | attributes `modbus_connected` → ON/OFF payloads, `expire_after: 180` |
+| `sensor.sigenergy2mqtt_overdue_topics` | attributes `overdue_topics`, `expire_after: 180` |
+| `sensor.sigenergy2mqtt_health_timestamp` | attributes Unix epoch `timestamp`, `expire_after: 180` |
 
 Provided by planned package `ha_sigen_diagnostics.yaml` (energy-stack).
 
