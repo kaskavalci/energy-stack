@@ -3,14 +3,35 @@
 **Last updated:** 2026-08-05
 **Author:** Auto
 
-## Sigen diagnostics dashboard — in repo; not yet live-deployed
+## Sigen diagnostics dashboard — DEPLOYED (2026-08-05 ~22:47 CEST); stale/unavailable check pending operator approval
 
 - Tasks 1–4 complete on `feature/sigen-diagnostics-dashboard`: package
   `ha_sigen_diagnostics.yaml`, dashboard `dashboards/sigen_diagnostics.yaml`,
   merge key `sigen-diagnostics`, deploy uploads wired.
 - Operator docs: [SETUP.md](../docs/SETUP.md) § Sigen diagnostics dashboard;
   entity IDs in [ENTITY_CONTRACT.md](../docs/ENTITY_CONTRACT.md) § Sigen diagnostics.
-- **Task 6:** `./scripts/deploy-home-assistant.sh` to push live on Odroid HA.
+- **Task 6 (live deploy + acceptance):**
+  - Preflight: `render-ha-packages.sh` clean; both test modules
+    (`test_ha_config_merge`, `test_sigen_diagnostics_dashboard`) — 17/17 passed.
+  - `./scripts/deploy-home-assistant.sh` — config check passed, HA Container
+    restarted clean. Backup:
+    `/home/halil/homeassistant/config/backups/energy-stack-20260805-224449/`.
+  - **Acceptance A (freshness, <180s):** PASS — `sigenergy2mqtt_health=healthy`,
+    `mqtt_connected=on`, `modbus_connected=on`, all ages ~6–21s post-restart.
+  - **Acceptance B (MQTT cross-check):** PASS —
+    `mosquitto_sub sigenergy2mqtt/health/state` on `ENERGY_REMOTE_HOST` → `healthy`.
+  - **Acceptance C (stale/unavailable after stopping `sigenergy2mqtt`): SKIPPED
+    by explicit operator/controller decision** — do not stop/restart
+    `sigenergy2mqtt` while master control may be active; interrupting
+    Modbus→MQTT without explicit operator approval is unsafe. Needs a
+    scheduled maintenance window + operator go-ahead before running.
+  - **Acceptance D (entity availability, best-effort):** PASS — all 38 entities
+    referenced by the rendered `sigen_diagnostics.yaml` dashboard resolved via
+    REST with no `unavailable`/`unknown`/missing states. UI-only checks
+    (sidebar entry, temp statistics-graph populated, bridge history-graph
+    3 series, simple-entity rows don't toggle EMS, trading dashboard still
+    loads) still need an operator visual pass.
+  - **Status: DONE_WITH_CONCERNS** — live and healthy; C intentionally not run.
 
 ## MPC abort 14:30 CEST (2026-08-05) — load-sample freshness false positive (read-only)
 
