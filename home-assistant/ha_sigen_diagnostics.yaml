@@ -1,0 +1,53 @@
+# Sigenergy bridge health (MQTT topics not HA-discovered by sigenergy2mqtt).
+# Topics + Unix timestamp payload verified live 2026-08-05.
+# expire_after 180s: 1.5× container health freshness window (120s @ 30s poll).
+# See docs/superpowers/specs/2026-08-05-sigen-diagnostics-dashboard-design.md
+
+mqtt:
+  sensor:
+    - name: Sigenergy2mqtt health
+      unique_id: energy_stack_sigenergy2mqtt_health
+      default_entity_id: sensor.sigenergy2mqtt_health
+      state_topic: sigenergy2mqtt/health/state
+      expire_after: 180
+      icon: mdi:heart-pulse
+
+    - name: Sigenergy2mqtt overdue topics
+      unique_id: energy_stack_sigenergy2mqtt_overdue_topics
+      default_entity_id: sensor.sigenergy2mqtt_overdue_topics
+      state_topic: sigenergy2mqtt/health/attributes
+      value_template: "{{ value_json.overdue_topics }}"
+      expire_after: 180
+      icon: mdi:timer-alert-outline
+
+    - name: Sigenergy2mqtt health timestamp
+      unique_id: energy_stack_sigenergy2mqtt_health_timestamp
+      default_entity_id: sensor.sigenergy2mqtt_health_timestamp
+      state_topic: sigenergy2mqtt/health/attributes
+      device_class: timestamp
+      value_template: "{{ (value_json.timestamp | int) | as_datetime }}"
+      expire_after: 180
+      icon: mdi:clock-outline
+
+  binary_sensor:
+    - name: Sigenergy2mqtt MQTT connected
+      unique_id: energy_stack_sigenergy2mqtt_mqtt_connected
+      default_entity_id: binary_sensor.sigenergy2mqtt_mqtt_connected
+      state_topic: sigenergy2mqtt/health/attributes
+      value_template: "{{ 'ON' if value_json.mqtt_connected else 'OFF' }}"
+      payload_on: "ON"
+      payload_off: "OFF"
+      expire_after: 180
+      device_class: connectivity
+      icon: mdi:mqtt
+
+    - name: Sigenergy2mqtt Modbus connected
+      unique_id: energy_stack_sigenergy2mqtt_modbus_connected
+      default_entity_id: binary_sensor.sigenergy2mqtt_modbus_connected
+      state_topic: sigenergy2mqtt/health/attributes
+      value_template: "{{ 'ON' if value_json.modbus_connected else 'OFF' }}"
+      payload_on: "ON"
+      payload_off: "OFF"
+      expire_after: 180
+      device_class: connectivity
+      icon: mdi:lan-connect
