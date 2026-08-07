@@ -165,7 +165,7 @@ class EmhassNetElectricityProfitTests(unittest.TestCase):
         self.assertIn("default_entity_id: sensor.emhass_net_electricity_profit_today", today)
         self.assertIn("unit_of_measurement: EUR", today)
         self.assertIn("device_class: monetary", today)
-        self.assertIn("state_class: measurement", today)
+        self.assertIn("state_class: total", today)
         self.assertIn(
             "sensor.zonneplan_electricity_production_costs_today", today
         )

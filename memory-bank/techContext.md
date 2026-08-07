@@ -41,7 +41,14 @@ HA itself runs on the **HA host** via [`home-assistant/docker-compose.yml`](../h
   `TIME_ZONE` in gitignored `config/site.env`; never rely on image defaults.
 - `TZ` and `TIME_ZONE` must match.
 - The trading dashboard uses native hourly statistics plus a today-only PV
-  forecast table. Import price forecast uses **ApexCharts** wrapped in
+  forecast table. It also shows a native 7-day daily net profit bar graph from
+  the existing continuous `sensor.emhass_net_electricity_profit_today`
+  (production − delivery, incl. tax) — **no separate daily-snapshot sensor**.
+  That sensor's `state_class` is `total` (not `total_increasing`, since net
+  profit can decrease intraday) and the `statistics-graph` card uses
+  `stat_types: [state]` so each day's bar is the last recorded value that
+  day (closed day ≈ EOD P/L; today = live running P/L). Import price forecast
+  uses **ApexCharts** wrapped in
   **config-template-card**, fed from Zonneplan
   `sensor.zonneplan_current_electricity_tariff` `forecast` (full day-ahead;
   `electricity_price / 1e7`). Span tracks the last hourly slot (`extend_to:

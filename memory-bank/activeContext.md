@@ -3,6 +3,45 @@
 **Last updated:** 2026-08-01
 **Author:** Auto
 
+## 7-day net electricity profit graph — repo-ready, corrected post-review (2026-08-01)
+
+**Author:** Auto / Claude
+
+Operator decision **overrode** the original 23:55-snapshot plan/spec after
+review. Implemented per revised spec
+`docs/superpowers/specs/2026-08-01-emhass-7d-net-profit-graph-design.md` on
+branch `feature/emhass-7d-net-profit-graph`:
+
+- **No new sensor.** `sensor.emhass_net_electricity_profit_daily` (23:55
+  trigger snapshot) was **removed** — never deployed, repo-only.
+- `sensor.emhass_net_electricity_profit_today` (existing, continuous,
+  production − delivery) changed `state_class: measurement` →
+  **`total`** (not `total_increasing` — net profit can decrease intraday).
+- Dashboard `statistics-graph` "Net electricity profit — last 7 days" now
+  reads that **today** sensor with `stat_types: [state]` (not `mean`).
+  Closed-day bar = last recorded value that calendar day ≈ EOD P/L; today's
+  bar = latest value so far = live P/L. `days_to_show: 7`, `period: day`,
+  `chart_type: bar` unchanged.
+- Month sensor (`sensor.emhass_net_electricity_profit_month`) untouched —
+  still `measurement`.
+
+**Not live-verified** until HA deploy. Unlike the rejected snapshot approach,
+there is no forward-only/backfill gap concern — the graph reads existing
+continuous history the moment `state_class: total` is deployed.
+
+**Operator deploy:**
+
+```bash
+source scripts/lib/source-site-env.sh
+./scripts/deploy-home-assistant.sh
+```
+
+**Post-deploy live checks:**
+
+1. `sensor.emhass_net_electricity_profit_today` has `state_class: total` (Developer Tools → States → Attributes).
+2. Trading view shows a live-moving bar for today and, after the next midnight boundary, a closed bar for the prior day at its EOD value.
+3. Master/control behavior unchanged (display-only change).
+
 ## Open-Meteo soft refresh — implemented locally (2026-08-01)
 
 - Example config and agent invariants now use `open_meteo_cache_max_age` **150**; cron clears cache at soft age `max_age − 2×step` (90 min with defaults). Hard B5/fail unchanged at 150.

@@ -126,7 +126,7 @@ template:
         default_entity_id: sensor.emhass_net_electricity_profit_today
         unit_of_measurement: EUR
         device_class: monetary
-        state_class: measurement
+        state_class: total
         icon: mdi:cash-plus
         state: >
           {% set production = states('sensor.zonneplan_electricity_production_costs_today') | float(none) %}

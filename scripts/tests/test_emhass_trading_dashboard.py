@@ -307,6 +307,32 @@ class NativePvPanelTests(unittest.TestCase):
         ):
             self.assertNotIn(duplicate, entities)
 
+    def test_net_profit_7d_statistics_graph(self) -> None:
+        cards = self.trading_view().get("cards", [])
+        prices_idx = next(
+            i
+            for i, card in enumerate(cards)
+            if isinstance(card, Mapping) and card.get("title") == "Prices"
+        )
+        graph = cards[prices_idx + 1]
+        self.assertIsInstance(graph, Mapping)
+        self.assertEqual(graph.get("type"), "statistics-graph")
+        self.assertEqual(
+            graph.get("title"), "Net electricity profit — last 7 days"
+        )
+        self.assertEqual(graph.get("days_to_show"), 7)
+        self.assertEqual(graph.get("period"), "day")
+        self.assertEqual(graph.get("chart_type"), "bar")
+        self.assertEqual(graph.get("stat_types"), ["state"])
+        entities = graph.get("entities")
+        self.assertIsInstance(entities, list)
+        self.assertEqual(len(entities), 1)
+        self.assertEqual(
+            entities[0].get("entity"),
+            "sensor.emhass_net_electricity_profit_today",
+        )
+        self.assertEqual(entities[0].get("name"), "Net profit (EUR)")
+
     def test_import_price_forecast_uses_full_zonneplan_horizon(self) -> None:
         wrapper = next(
             c
