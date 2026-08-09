@@ -15,6 +15,7 @@ homeassistant:
     reterminal_emhass_monitoring: !include ha_emhass_monitoring.yaml
     reterminal_emhass_helpers: !include ha_emhass_helpers.yaml
     reterminal_sigen_ems: !include ha_sigen_ems.yaml
+    reterminal_sigen_diagnostics: !include ha_sigen_diagnostics.yaml
 
 lovelace:
   dashboards:
@@ -24,3 +25,9 @@ lovelace:
       icon: mdi:battery-charging-wireless
       show_in_sidebar: true
       filename: dashboards/emhass_trading.yaml
+    sigen-diagnostics:
+      mode: yaml
+      title: Sigen diagnostics
+      icon: mdi:battery-heart-variant
+      show_in_sidebar: true
+      filename: dashboards/sigen_diagnostics.yaml

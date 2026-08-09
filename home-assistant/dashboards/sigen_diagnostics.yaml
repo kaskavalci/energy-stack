@@ -1,0 +1,108 @@
+title: Sigen diagnostics
+views:
+  - title: Diagnostics
+    path: sigen-diagnostics
+    icon: mdi:battery-heart-variant
+    cards:
+      - type: entities
+        title: Battery health
+        entities:
+          - entity: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
+          - entity: sensor.__SIGEN_PLANT_SLUG___plant_battery_soh
+          - entity: sensor.__SIGEN_PLANT_SLUG___plant_battery_power
+          - entity: sensor.__SIGEN_PLANT_SLUG___inverter_1_average_cell_temperature
+          - entity: sensor.__SIGEN_PLANT_SLUG___inverter_1_max_battery_temperature
+          - entity: sensor.__SIGEN_PLANT_SLUG___inverter_1_min_battery_temperature
+          - entity: sensor.__SIGEN_PLANT_SLUG___inverter_1_temperature
+          - entity: sensor.__SIGEN_PLANT_SLUG___inverter_1_average_cell_voltage
+          - entity: sensor.__SIGEN_PLANT_SLUG___inverter_1_available_battery_charge_energy
+          - entity: sensor.__SIGEN_PLANT_SLUG___inverter_1_available_battery_discharge_energy
+
+      - type: entities
+        title: Status and alarms
+        entities:
+          - entity: switch.__SIGEN_PLANT_SLUG___plant_remote_ems
+            type: simple-entity
+          - entity: select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode
+            type: simple-entity
+          - entity: sensor.__SIGEN_PLANT_SLUG___plant_grid_status
+          - entity: sensor.__SIGEN_PLANT_SLUG___plant_grid_sensor_status
+          - entity: sensor.__SIGEN_PLANT_SLUG___plant_alarms
+          - entity: sensor.__SIGEN_PLANT_SLUG___general_alarm_3
+          - entity: sensor.__SIGEN_PLANT_SLUG___general_alarm_4
+          - entity: sensor.__SIGEN_PLANT_SLUG___general_pcs_alarm
+          - entity: sensor.__SIGEN_PLANT_SLUG___inverter_1_alarm_3
+          - entity: sensor.__SIGEN_PLANT_SLUG___inverter_1_alarm_4
+          - entity: sensor.__SIGEN_PLANT_SLUG___inverter_1_pcs_alarm
+
+      - type: entities
+        title: Bridge liveness
+        entities:
+          - entity: sensor.sigenergy2mqtt_health
+            secondary_info: last-updated
+          - entity: binary_sensor.sigenergy2mqtt_mqtt_connected
+            secondary_info: last-updated
+          - entity: binary_sensor.sigenergy2mqtt_modbus_connected
+            secondary_info: last-updated
+          - entity: sensor.sigenergy2mqtt_overdue_topics
+            secondary_info: last-updated
+          - entity: sensor.sigenergy2mqtt_health_timestamp
+            secondary_info: last-updated
+
+      - type: entities
+        title: Bridge metrics
+        entities:
+          - entity: sensor.sigenergy2mqtt_started
+            secondary_info: last-updated
+          - entity: sensor.sigenergy2mqtt_modbus_protocol
+            secondary_info: last-updated
+          - entity: sensor.sigenergy2mqtt_modbus_read_errors
+            secondary_info: last-updated
+          - entity: sensor.sigenergy2mqtt_modbus_write_errors
+            secondary_info: last-updated
+          - entity: sensor.sigenergy2mqtt_modbus_read_mean
+            secondary_info: last-updated
+          - entity: sensor.sigenergy2mqtt_modbus_read_max
+            secondary_info: last-updated
+          - entity: sensor.sigenergy2mqtt_modbus_write_mean
+            secondary_info: last-updated
+          - entity: sensor.sigenergy2mqtt_modbus_write_max
+            secondary_info: last-updated
+          - entity: sensor.sigenergy2mqtt_modbus_reads_sec
+            secondary_info: last-updated
+          - entity: sensor.sigenergy2mqtt_modbus_cache_hit_percentage
+            secondary_info: last-updated
+          - entity: sensor.sigenergy2mqtt_mqtt_publish_failures
+            secondary_info: last-updated
+          - entity: sensor.sigenergy2mqtt_mqtt_physical_publish_percentage
+            secondary_info: last-updated
+
+      - type: statistics-graph
+        title: Battery and PCS temperatures — last 7 days
+        days_to_show: 7
+        period: hour
+        chart_type: line
+        stat_types:
+          - mean
+        entities:
+          - entity: sensor.__SIGEN_PLANT_SLUG___inverter_1_average_cell_temperature
+          - entity: sensor.__SIGEN_PLANT_SLUG___inverter_1_max_battery_temperature
+          - entity: sensor.__SIGEN_PLANT_SLUG___inverter_1_min_battery_temperature
+          - entity: sensor.__SIGEN_PLANT_SLUG___inverter_1_temperature
+
+      # Intentional history-graph: live sigenergy2mqtt metric sensors have no state_class.
+      - type: history-graph
+        title: Bridge Modbus errors and read mean — last 7 days
+        hours_to_show: 168
+        entities:
+          - entity: sensor.sigenergy2mqtt_modbus_read_errors
+          - entity: sensor.sigenergy2mqtt_modbus_write_errors
+          - entity: sensor.sigenergy2mqtt_modbus_read_mean
+
+      - type: logbook
+        title: EMHASS events
+        target:
+          entity_id:
+            - input_text.emhass_alert_event
+        hours_to_show: 48
+        name_detail: entity

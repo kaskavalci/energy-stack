@@ -67,10 +67,11 @@ upload() {
   remote "cat > '${HA_CONFIG_DIR}/$2'" < "$1"
 }
 
-for f in ha_emhass.yaml ha_emhass_sensors.yaml ha_emhass_dashboard.yaml ha_emhass_monitoring.yaml ha_emhass_helpers.yaml ha_sigen_ems.yaml; do
+for f in ha_emhass.yaml ha_emhass_sensors.yaml ha_emhass_dashboard.yaml ha_emhass_monitoring.yaml ha_emhass_helpers.yaml ha_sigen_ems.yaml ha_sigen_diagnostics.yaml; do
   upload "${RENDERED}/${f}" "${f}"
 done
 upload "${RENDERED}/dashboards/emhass_trading.yaml" "dashboards/emhass_trading.yaml"
+upload "${RENDERED}/dashboards/sigen_diagnostics.yaml" "dashboards/sigen_diagnostics.yaml"
 
 remote "cat '${HA_CONFIG_DIR}/configuration.yaml'" > "/tmp/ha_configuration_live.yaml"
 PYTHONPATH="${ROOT}/scripts/lib" "$PYTHON" "${ROOT}/scripts/lib/merge_ha_config_cli.py" \

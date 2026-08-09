@@ -57,6 +57,7 @@ ENERGY_STACK_MANIFEST = DeployManifest(
         "reterminal_emhass_monitoring": "!include ha_emhass_monitoring.yaml",
         "reterminal_emhass_helpers": "!include ha_emhass_helpers.yaml",
         "reterminal_sigen_ems": "!include ha_sigen_ems.yaml",
+        "reterminal_sigen_diagnostics": "!include ha_sigen_diagnostics.yaml",
     },
     lovelace_dashboards={
         "emhass-trading": {
@@ -65,6 +66,13 @@ ENERGY_STACK_MANIFEST = DeployManifest(
             "icon": "mdi:battery-charging-wireless",
             "show_in_sidebar": True,
             "filename": "dashboards/emhass_trading.yaml",
+        },
+        "sigen-diagnostics": {
+            "mode": "yaml",
+            "title": "Sigen diagnostics",
+            "icon": "mdi:battery-heart-variant",
+            "show_in_sidebar": True,
+            "filename": "dashboards/sigen_diagnostics.yaml",
         },
     },
     recorder_entity_globs=("input_number.emhass_soc_*",),

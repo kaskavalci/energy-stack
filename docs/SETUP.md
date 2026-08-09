@@ -1,6 +1,6 @@
 # Setup guide
 
-**Last updated:** 2026-07-21
+**Last updated:** 2026-08-05
 
 Operator guide for a fresh clone of **energy-stack**.
 
@@ -125,6 +125,14 @@ If mode or limit confirmation times out, keep the master off and investigate the
 `EMHASS D2` notification. Home Assistant start or a Sigenergy mode-entity reconnect
 while the master is off reruns the same restoration transaction, including when
 the inverter reports native mode immediately.
+
+## Sigen diagnostics dashboard
+
+Sidebar: **Sigen diagnostics** (`dashboards/sigen_diagnostics.yaml`).
+Read-only plant health (temps, SOC/SOH, alarms, EMS posture) plus
+`sigenergy2mqtt` health MQTT sensors (`expire_after: 180`) and Modbus/MQTT metrics.
+Registered via energy-stack deploy merge (`sigen-diagnostics`).
+Entity IDs: [ENTITY_CONTRACT.md](ENTITY_CONTRACT.md) § Sigen diagnostics.
 
 ## Security notes
 

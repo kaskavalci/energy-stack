@@ -9,6 +9,8 @@ input_boolean:
   emhass_recovery_active:
     name: EMHASS SOC recovery active
     icon: mdi:battery-sync
+  emhass_d2_actionable_notified:
+    name: EMHASS D2 actionable notified
 
 input_number:
   emhass_max_charge_cap_w:
@@ -49,6 +51,18 @@ input_number:
     step: 0.05
     mode: box
     initial: 0.6
+  emhass_d2_failure_count:
+    name: EMHASS D2 failure count
+    min: 0
+    max: 2
+    step: 1
+    mode: box
+    initial: 0
+
+input_text:
+  emhass_d2_failure_signature:
+    name: EMHASS D2 failure signature
+    max: 255
 
 input_select:
   # Options from select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode (HA REST, 2026-05-23)
@@ -79,6 +93,10 @@ input_select:
 input_datetime:
   emhass_last_limit_write:
     name: EMHASS last Sigen limit write
+    has_date: true
+    has_time: true
+  emhass_d2_last_failure:
+    name: EMHASS D2 last failure
     has_date: true
     has_time: true
 
@@ -210,6 +228,12 @@ script:
       Return control to native Maximum Self-consumption, restore device-valid
       operator limits, and record success only after Sigenergy confirms both phases.
     mode: restart
+    fields:
+      reason:
+        description: Context that requested native control restoration
+        default: unknown
+        selector:
+          text:
     sequence:
       - variables:
           native_mode: "{{ states('input_select.emhass_ems_mode_native') }}"
@@ -240,12 +264,134 @@ script:
           - condition: template
             value_template: "{{ not wait.completed }}"
         then:
-          - service: script.emhass_push_alert
-            data:
-              title: "EMHASS D2: Native fallback mode confirmation failed"
-              message: >-
-                Master is off, but Sigenergy did not confirm native mode and available
-                limit entities within 75 seconds. Keep EMHASS control disabled.
+          - variables:
+              phase: native_mode_confirmation
+              signature: "{{ reason ~ '|' ~ phase }}"
+              master_state: "{{ states('input_boolean.emhass_auto_control_master') }}"
+              mode_state: "{{ states('select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode') }}"
+              charge_state: "{{ states('number.__SIGEN_PLANT_SLUG___plant_max_charging_limit') }}"
+              discharge_state: "{{ states('number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit') }}"
+              previous_signature: "{{ states('input_text.emhass_d2_failure_signature') }}"
+              previous_count: "{{ states('input_number.emhass_d2_failure_count') | int(0) }}"
+              previous_ts: >-
+                {{ state_attr('input_datetime.emhass_d2_last_failure', 'timestamp')
+                   | float(0) }}
+              control_failure_reasons: "{{ ['stale_plan', 'bad_optim'] }}"
+              fallback_unconfirmed: >-
+                {% set bad = ['unknown', 'unavailable', 'none', ''] %}
+                {{ not (
+                     is_state('select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode', native_mode)
+                     and states('number.__SIGEN_PLANT_SLUG___plant_max_charging_limit') not in bad
+                     and states('number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit') not in bad
+                     and (state_attr('number.__SIGEN_PLANT_SLUG___plant_max_charging_limit', 'max')
+                          | float(0)) > 0
+                     and (state_attr('number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit', 'max')
+                          | float(0)) > 0
+                   ) }}
+          - variables:
+              same_context: >-
+                {{ previous_signature == signature
+                   and previous_ts > 0
+                   and (as_timestamp(now()) - previous_ts) <= 10 * 60 }}
+              next_count: >-
+                {{ [2, (previous_count + 1) if (
+                     previous_signature == signature
+                     and previous_ts > 0
+                     and (as_timestamp(now()) - previous_ts) <= 10 * 60
+                   ) else 1] | min }}
+              state_message: >-
+                reason={{ reason }}, confirmation_phase={{ phase }},
+                master={{ master_state }}, mode={{ mode_state }},
+                charge_limit={{ charge_state }} kW,
+                discharge_limit={{ discharge_state }} kW.
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: >-
+                      {{ reason in control_failure_reasons
+                         and master_state == 'on'
+                         and fallback_unconfirmed
+                         and same_context
+                         and previous_count == 1
+                         and not is_state(
+                               'input_boolean.emhass_d2_actionable_notified', 'on') }}
+                sequence:
+                  - service: script.emhass_push_alert
+                    data:
+                      title: "EMHASS D2: Native fallback unconfirmed"
+                      message: >-
+                        Action: Check Sigenergy mode, limit entities, and sigenergy2mqtt.
+                        Second same-context timeout within 10 minutes;
+                        {{ state_message }}
+                  - service: input_boolean.turn_on
+                    target:
+                      entity_id: input_boolean.emhass_d2_actionable_notified
+                  - service: input_text.set_value
+                    target:
+                      entity_id: input_text.emhass_d2_failure_signature
+                    data:
+                      value: "{{ signature }}"
+                  - service: input_number.set_value
+                    target:
+                      entity_id: input_number.emhass_d2_failure_count
+                    data:
+                      value: "{{ next_count }}"
+                  - service: input_datetime.set_datetime
+                    target:
+                      entity_id: input_datetime.emhass_d2_last_failure
+                    data:
+                      datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+                  - service: script.emhass_log_event
+                    continue_on_error: true
+                    data:
+                      incident_id: D2
+                      phase: actionable
+                      message: "{{ state_message }}"
+                      action: Check Sigenergy mode, limit entities, and sigenergy2mqtt.
+              - conditions:
+                  - condition: template
+                    value_template: >-
+                      {{ reason in control_failure_reasons
+                         and master_state == 'on'
+                         and fallback_unconfirmed
+                         and same_context
+                         and (previous_count >= 2
+                              or is_state(
+                                   'input_boolean.emhass_d2_actionable_notified',
+                                   'on')) }}
+                sequence:
+                  - service: script.emhass_log_event
+                    continue_on_error: true
+                    data:
+                      incident_id: D2
+                      phase: suppressed
+                      message: >-
+                        Duplicate phone notification suppressed for
+                        signature={{ signature }}; {{ state_message }}
+                      action: Check the existing D2 actionable event.
+            default:
+              - service: script.emhass_log_event
+                continue_on_error: true
+                data:
+                  incident_id: D2
+                  phase: recovering
+                  message: "{{ state_message }}"
+                  action: Monitor native fallback confirmation.
+              - service: input_text.set_value
+                target:
+                  entity_id: input_text.emhass_d2_failure_signature
+                data:
+                  value: "{{ signature }}"
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.emhass_d2_failure_count
+                data:
+                  value: "{{ next_count }}"
+              - service: input_datetime.set_datetime
+                target:
+                  entity_id: input_datetime.emhass_d2_last_failure
+                data:
+                  datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
           - stop: "Native fallback mode confirmation failed"
             error: true
       - variables:
@@ -288,15 +434,167 @@ script:
           - condition: template
             value_template: "{{ not wait.completed }}"
         then:
-          - service: script.emhass_push_alert
-            data:
-              title: "EMHASS D2: Native fallback limit confirmation failed"
-              message: >-
-                Sigenergy is in native mode, but limits did not converge to
-                charge={{ charge_target_kw }} kW and discharge={{ discharge_target_kw }} kW
-                within 30 seconds. Keep EMHASS control disabled.
+          - variables:
+              phase: limit_confirmation
+              signature: "{{ reason ~ '|' ~ phase }}"
+              master_state: "{{ states('input_boolean.emhass_auto_control_master') }}"
+              mode_state: "{{ states('select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode') }}"
+              charge_state: "{{ states('number.__SIGEN_PLANT_SLUG___plant_max_charging_limit') }}"
+              discharge_state: "{{ states('number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit') }}"
+              previous_signature: "{{ states('input_text.emhass_d2_failure_signature') }}"
+              previous_count: "{{ states('input_number.emhass_d2_failure_count') | int(0) }}"
+              previous_ts: >-
+                {{ state_attr('input_datetime.emhass_d2_last_failure', 'timestamp')
+                   | float(0) }}
+              fallback_unconfirmed: >-
+                {% set charge_actual_kw =
+                     states('number.__SIGEN_PLANT_SLUG___plant_max_charging_limit') | float(none) %}
+                {% set discharge_actual_kw =
+                     states('number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit') | float(none) %}
+                {{ charge_actual_kw is none
+                   or discharge_actual_kw is none
+                   or ((charge_actual_kw - (charge_target_kw | float(0))) | abs) > 0.02
+                   or ((discharge_actual_kw - (discharge_target_kw | float(0))) | abs) > 0.02 }}
+          - variables:
+              same_context: >-
+                {{ previous_signature == signature
+                   and previous_ts > 0
+                   and (as_timestamp(now()) - previous_ts) <= 10 * 60 }}
+              next_count: >-
+                {{ [2, (previous_count + 1) if (
+                     previous_signature == signature
+                     and previous_ts > 0
+                     and (as_timestamp(now()) - previous_ts) <= 10 * 60
+                   ) else 1] | min }}
+              state_message: >-
+                reason={{ reason }}, confirmation_phase={{ phase }},
+                master={{ master_state }}, mode={{ mode_state }},
+                charge_limit={{ charge_state }} kW (target={{ charge_target_kw }}),
+                discharge_limit={{ discharge_state }} kW (target={{ discharge_target_kw }}).
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: >-
+                      {{ reason in ['stale_plan', 'bad_optim']
+                         and master_state == 'on'
+                         and fallback_unconfirmed
+                         and same_context
+                         and previous_count == 1
+                         and not is_state(
+                               'input_boolean.emhass_d2_actionable_notified', 'on') }}
+                sequence:
+                  - service: script.emhass_push_alert
+                    data:
+                      title: "EMHASS D2: Native fallback limits unconfirmed"
+                      message: >-
+                        Action: Check Sigenergy limit entities and sigenergy2mqtt.
+                        Second same-context timeout within 10 minutes;
+                        {{ state_message }}
+                  - service: input_boolean.turn_on
+                    target:
+                      entity_id: input_boolean.emhass_d2_actionable_notified
+                  - service: input_text.set_value
+                    target:
+                      entity_id: input_text.emhass_d2_failure_signature
+                    data:
+                      value: "{{ signature }}"
+                  - service: input_number.set_value
+                    target:
+                      entity_id: input_number.emhass_d2_failure_count
+                    data:
+                      value: "{{ next_count }}"
+                  - service: input_datetime.set_datetime
+                    target:
+                      entity_id: input_datetime.emhass_d2_last_failure
+                    data:
+                      datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+                  - service: script.emhass_log_event
+                    continue_on_error: true
+                    data:
+                      incident_id: D2
+                      phase: actionable
+                      message: "{{ state_message }}"
+                      action: Check Sigenergy limit entities and sigenergy2mqtt.
+              - conditions:
+                  - condition: template
+                    value_template: >-
+                      {{ reason in ['stale_plan', 'bad_optim']
+                         and master_state == 'on'
+                         and fallback_unconfirmed
+                         and same_context
+                         and (previous_count >= 2
+                              or is_state(
+                                   'input_boolean.emhass_d2_actionable_notified',
+                                   'on')) }}
+                sequence:
+                  - service: script.emhass_log_event
+                    continue_on_error: true
+                    data:
+                      incident_id: D2
+                      phase: suppressed
+                      message: >-
+                        Duplicate phone notification suppressed for
+                        signature={{ signature }}; {{ state_message }}
+                      action: Check the existing D2 actionable event.
+            default:
+              - service: script.emhass_log_event
+                continue_on_error: true
+                data:
+                  incident_id: D2
+                  phase: recovering
+                  message: "{{ state_message }}"
+                  action: Monitor native fallback confirmation.
+              - service: input_text.set_value
+                target:
+                  entity_id: input_text.emhass_d2_failure_signature
+                data:
+                  value: "{{ signature }}"
+              - service: input_number.set_value
+                target:
+                  entity_id: input_number.emhass_d2_failure_count
+                data:
+                  value: "{{ next_count }}"
+              - service: input_datetime.set_datetime
+                target:
+                  entity_id: input_datetime.emhass_d2_last_failure
+                data:
+                  datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
           - stop: "Native fallback limit confirmation failed"
             error: true
+      - variables:
+          resolved_signature: "{{ states('input_text.emhass_d2_failure_signature') }}"
+          resolved_count: "{{ states('input_number.emhass_d2_failure_count') | int(0) }}"
+          resolved_notified: >-
+            {{ is_state('input_boolean.emhass_d2_actionable_notified', 'on') }}
+      - if:
+          - condition: template
+            value_template: >-
+              {{ resolved_signature != '' or resolved_count > 0 or resolved_notified }}
+        then:
+          - service: script.emhass_log_event
+            continue_on_error: true
+            data:
+              incident_id: D2
+              phase: resolved
+              message: >-
+                Native mode and limits confirmed after signature={{ resolved_signature }};
+                master={{ states('input_boolean.emhass_auto_control_master') }},
+                mode={{ states('select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode') }},
+                charge_limit={{ states('number.__SIGEN_PLANT_SLUG___plant_max_charging_limit') }} kW,
+                discharge_limit={{ states('number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit') }} kW.
+          - service: input_boolean.turn_off
+            target:
+              entity_id: input_boolean.emhass_d2_actionable_notified
+          - service: input_text.set_value
+            target:
+              entity_id: input_text.emhass_d2_failure_signature
+            data:
+              value: ""
+          - service: input_number.set_value
+            target:
+              entity_id: input_number.emhass_d2_failure_count
+            data:
+              value: 0
       - service: input_datetime.set_datetime
         target:
           entity_id: input_datetime.emhass_last_limit_write
@@ -307,8 +605,16 @@ script:
     alias: Sigen disable Remote EMS control
     description: Restore limits and set self-consumption mode when master is turned off.
     mode: restart
+    fields:
+      reason:
+        description: Context that requested Remote EMS disable
+        default: master_off
+        selector:
+          text:
     sequence:
       - service: script.sigen_restore_native_control
+        data:
+          reason: "{{ reason }}"
 
   sigen_clear_recovery:
     alias: Sigen clear EMHASS SOC recovery
@@ -436,6 +742,8 @@ script:
                 value_template: "{{ p >= (0 - threshold) and p <= threshold }}"
             sequence:
               - service: script.sigen_restore_native_control
+                data:
+                  reason: idle
         default:
           - service: script.sigen_set_ems_mode
             data:
@@ -454,6 +762,8 @@ automation:
     action:
       - service: script.sigen_clear_recovery
       - service: script.sigen_disable_remote_ems
+        data:
+          reason: master_off
 
   - id: emhass_sigen_enforce_master_off
     alias: EMHASS Sigen — enforce master off after start or reconnect
@@ -489,6 +799,8 @@ automation:
                 ] }}
     action:
       - service: script.sigen_disable_remote_ems
+        data:
+          reason: startup_or_reconnect
 
   - id: emhass_sigen_apply_plan_scheduled
     alias: EMHASS Sigen — apply actionable plan
@@ -547,6 +859,16 @@ automation:
       - condition: template
         value_template: "{{ state_attr('binary_sensor.emhass_control_allowed', 'block_reason') != 'soc_below_floor' }}"
     action:
+      - service: script.emhass_log_event
+        data:
+          incident_id: D2
+          phase: detected
+          message: >-
+            Stale-plan fallback requested; master={{
+            states('input_boolean.emhass_auto_control_master') }},
+            block_reason={{
+            state_attr('binary_sensor.emhass_control_allowed', 'block_reason') }}.
+          action: Monitor native fallback confirmation.
       - choose:
           - conditions:
               - condition: template
@@ -561,11 +883,8 @@ automation:
               - service: script.sigen_apply_idle_limits
         default:
           - service: script.sigen_restore_native_control
-      - service: script.emhass_push_alert
-        data:
-          title: "EMHASS D2: Remote EMS off"
-          message: >-
-            Action: Turn off master to acknowledge. Control gates failed — Remote EMS disabled (master still on).
+            data:
+              reason: stale_plan
 
   - id: emhass_sigen_disable_on_bad_optim
     alias: EMHASS Sigen — disable when optim not Optimal
@@ -586,12 +905,18 @@ automation:
       - condition: template
         value_template: "{{ not is_state('sensor.optim_status', 'Optimal') }}"
     action:
-      - service: script.sigen_restore_native_control
-      - service: script.emhass_push_alert
+      - service: script.emhass_log_event
         data:
-          title: "EMHASS D2: bad optim"
+          incident_id: D2
+          phase: detected
           message: >-
-            Action: Check EMHASS logs. optim_status={{ states('sensor.optim_status') }} — Remote EMS disabled.
+            Bad-optim fallback requested; optim_status={{
+            states('sensor.optim_status') }}, master={{
+            states('input_boolean.emhass_auto_control_master') }}.
+          action: Check EMHASS logs and monitor native fallback confirmation.
+      - service: script.sigen_restore_native_control
+        data:
+          reason: bad_optim
 
   # --- SOC floor enforcement (Layer 2) ---
 
@@ -655,6 +980,8 @@ automation:
             state: "off"
         then:
           - service: script.sigen_restore_native_control
+            data:
+              reason: soc_floor
 
   # --- Recovery charging (Layer 3) ---
 
@@ -768,6 +1095,8 @@ automation:
             sequence:
               - service: script.sigen_clear_recovery
               - service: script.sigen_restore_native_control
+                data:
+                  reason: recovery
               - service: logbook.log
                 data:
                   name: EMHASS EMS
@@ -778,6 +1107,8 @@ automation:
             sequence:
               - service: script.sigen_clear_recovery
               - service: script.sigen_restore_native_control
+                data:
+                  reason: recovery
               - service: logbook.log
                 data:
                   name: EMHASS EMS
@@ -796,6 +1127,8 @@ automation:
                       - service: script.sigen_apply_emhass_plan
                 default:
                   - service: script.sigen_restore_native_control
+                    data:
+                      reason: recovery
               - service: logbook.log
                 data:
                   name: EMHASS EMS

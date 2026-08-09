@@ -67,6 +67,9 @@ HA itself runs on the **HA host** via [`home-assistant/docker-compose.yml`](../h
   limits are confirmed, then `emhass_last_limit_write` advances.
 - Home Assistant start or a Sigenergy mode reconnect while the master is off
   reruns native restoration even when the returned mode is already native.
+- Sigen diagnostics is a separate YAML Lovelace dashboard (`sigen-diagnostics`)
+  with MQTT health sensors (`expire_after: 180`) from `ha_sigen_diagnostics.yaml`;
+  native cards only.
 
 ## Deploy
 

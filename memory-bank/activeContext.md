@@ -1,7 +1,20 @@
 # Active Context
 
-**Last updated:** 2026-08-01
-**Author:** Auto
+**Last updated:** 2026-08-09
+**Author:** Composer
+
+## EMHASS actionable alert escalation — committed, not deployed (2026-08-09)
+
+Branch `feature/emhass-actionable-alert-escalation`: phone only after
+operator-action deadlines; detection/intentional/recovery stay Logbook-only.
+
+- HA: `script.emhass_log_event` + `input_text.emhass_alert_event`; C/E 30 min;
+  D3 2h/6h; D2 reason/phase with `emhass_d2_actionable_notified` phone marker;
+  C2a/E1 ownership suppress vs B6/plan-stale/D2 actionable.
+- Monitor: B2–B6 detect → log, phone after 60 min; B6 ownership helper with
+  pending retry; hard A4/A6/B1 stay immediate.
+- Dashboard: native EMHASS events Logbook card (48h) on Sigen diagnostics.
+- Spec/plan under `docs/superpowers/`; deploy still needs operator approval.
 
 ## 7-day net electricity profit graph — repo-ready, corrected post-review (2026-08-01)
 
@@ -42,12 +55,59 @@ source scripts/lib/source-site-env.sh
 2. Trading view shows a live-moving bar for today and, after the next midnight boundary, a closed bar for the prior day at its EOD value.
 3. Master/control behavior unchanged (display-only change).
 
-## Open-Meteo soft refresh — implemented locally (2026-08-01)
+## Sigen diagnostics dashboard — DEPLOYED (2026-08-05 ~22:47 CEST); stale/unavailable check pending operator approval
 
-- Example config and agent invariants now use `open_meteo_cache_max_age` **150**; cron clears cache at soft age `max_age − 2×step` (90 min with defaults). Hard B5/fail unchanged at 150.
-- **Operator deploy:** Before `./scripts/deploy-energy-stack.sh`, edit the local
-  gitignored `emhass/share/config.json` to set `"open_meteo_cache_max_age": 150`;
-  after deploy, confirm 150 in `share/config.json` on the energy host.
+- Tasks 1–4 complete on `feature/sigen-diagnostics-dashboard`: package
+  `ha_sigen_diagnostics.yaml`, dashboard `dashboards/sigen_diagnostics.yaml`,
+  merge key `sigen-diagnostics`, deploy uploads wired.
+- Operator docs: [SETUP.md](../docs/SETUP.md) § Sigen diagnostics dashboard;
+  entity IDs in [ENTITY_CONTRACT.md](../docs/ENTITY_CONTRACT.md) § Sigen diagnostics.
+- **Task 6 (live deploy + acceptance):**
+  - Preflight: `render-ha-packages.sh` clean; both test modules
+    (`test_ha_config_merge`, `test_sigen_diagnostics_dashboard`) — 17/17 passed.
+  - `./scripts/deploy-home-assistant.sh` — config check passed, HA Container
+    restarted clean. Backup:
+    `/home/halil/homeassistant/config/backups/energy-stack-20260805-224449/`.
+  - **Acceptance A (freshness, <180s):** PASS — `sigenergy2mqtt_health=healthy`,
+    `mqtt_connected=on`, `modbus_connected=on`, all ages ~6–21s post-restart.
+  - **Acceptance B (MQTT cross-check):** PASS —
+    `mosquitto_sub sigenergy2mqtt/health/state` on `ENERGY_REMOTE_HOST` → `healthy`.
+  - **Acceptance C (stale/unavailable after stopping `sigenergy2mqtt`): SKIPPED
+    by explicit operator/controller decision** — do not stop/restart
+    `sigenergy2mqtt` while master control may be active; interrupting
+    Modbus→MQTT without explicit operator approval is unsafe. Needs a
+    scheduled maintenance window + operator go-ahead before running.
+  - **Acceptance D (entity availability, best-effort):** PASS — all 38 entities
+    referenced by the rendered `sigen_diagnostics.yaml` dashboard resolved via
+    REST with no `unavailable`/`unknown`/missing states. UI-only checks
+    (sidebar entry, temp statistics-graph populated, bridge history-graph
+    3 series, simple-entity rows don't toggle EMS, trading dashboard still
+    loads) still need an operator visual pass.
+  - **Status: DONE_WITH_CONCERNS** — live and healthy; C intentionally not run.
+
+## MPC abort 14:30 CEST (2026-08-05) — load-sample freshness false positive (read-only)
+
+- Containers healthy; prices/weather OK. Only the **14:30** natural MPC failed.
+- `last_enever_run.json`: `mpc.ok=false`, `failure_kind=load_history`,
+  newest finite sample **10.0 min** old (max 5). Last success marker still
+  `2026-08-05 14:00:44`. Master **on**; `emhass_mpc_fresh` /
+  `emhass_control_allowed` **off** (`plan_stale`).
+- Root: `sensor.emhass_house_load_sample_w` sat at **0 W** for ~11 min
+  (`12:20`→`12:31` UTC / `14:20`→`14:31` CEST). HA recorder collapses unchanged
+  state, so history `last_changed` did not advance; fail-closed gate treated it
+  as stale. Underlying cause of the zero clamp: formula
+  `max(grid + pv − batt, 0)` while battery discharged ~**2.7 kW** (prior plan)
+  and grid+PV roughly cancelled it — not a P1/HA outage.
+- Sample sensor live again by ~14:55 (`sampled_at` current, non-zero). Next
+  natural **15:00** MPC should recover if samples keep changing. No code/deploy
+  done (read-only ask).
+
+## Open-Meteo soft refresh — DEPLOYED (2026-08-01 ~07:45 CEST)
+
+- Soft clear at `max_age − 2×step` (**90**); hard B5/fail at **150**.
+- Live `emhass/share/config.json` on energy host: `open_meteo_cache_max_age=150`.
+- Cron container reports hard=150, soft=90. `emhass`/`emhass-cron`/`energy-monitor` rebuilt+restarted.
+- Post-recreate weather cache was empty; `refresh-weather` ran to rebuild. Watch next natural MPC.
 
 ## Floating `:latest` for EMHASS + sigenergy2mqtt — DEPLOYED (2026-07-30 ~21:49 CEST)
 
