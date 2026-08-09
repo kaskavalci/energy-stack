@@ -227,9 +227,11 @@ class NativePvPanelTests(unittest.TestCase):
             and node["type"].startswith("custom:")
         ]
         self.assertEqual(
-            custom_types,
-            ["custom:config-template-card", "custom:apexcharts-card"],
+            set(custom_types),
+            {"custom:config-template-card", "custom:apexcharts-card"},
         )
+        self.assertEqual(custom_types.count("custom:config-template-card"), 1)
+        self.assertEqual(custom_types.count("custom:apexcharts-card"), 2)
         self.assertEqual(self.dashboard.get("resources", []), [])
 
     def trading_view(self) -> Mapping[str, Any]:
@@ -307,39 +309,30 @@ class NativePvPanelTests(unittest.TestCase):
         ):
             self.assertNotIn(duplicate, entities)
 
-    def test_plan_vs_battery_uses_emhass_sign_aligned_actual(self) -> None:
-        """Sigen plant_battery_power is opposite EMHASS p_batt; overlay must flip."""
+    def test_plan_vs_battery_inverts_sigen_power_for_emhass_sign(self) -> None:
+        """Keep Sigen entity history; invert in ApexCharts to match EMHASS sign."""
         graph = next(
             card
             for card in self.trading_view().get("cards", [])
-            if isinstance(card, Mapping) and card.get("title") == "Plan vs battery (24 h)"
+            if isinstance(card, Mapping)
+            and card.get("type") == "custom:apexcharts-card"
+            and isinstance(card.get("header"), Mapping)
+            and card["header"].get("title") == "Plan vs battery (24 h)"
         )
-        self.assertEqual(graph.get("type"), "history-graph")
-        entities = graph.get("entities")
-        self.assertIsInstance(entities, list)
-        entity_ids = [
-            row.get("entity") if isinstance(row, Mapping) else row for row in entities
-        ]
+        self.assertEqual(graph.get("graph_span"), "24h")
+        series = graph.get("series")
+        self.assertIsInstance(series, list)
+        self.assertEqual(len(series), 2)
+        plan, actual = series
+        self.assertEqual(plan.get("entity"), "sensor.p_batt_forecast")
         self.assertEqual(
-            entity_ids,
-            [
-                "sensor.p_batt_forecast",
-                "sensor.emhass_battery_power_emhass_sign_w",
-            ],
+            actual.get("entity"),
+            "sensor.__SIGEN_PLANT_SLUG___plant_battery_power",
         )
-        self.assertNotIn(
-            "sensor.__SIGEN_PLANT_SLUG___plant_battery_power", entity_ids
-        )
-        named = {
-            (row.get("entity") if isinstance(row, Mapping) else row): (
-                row.get("name") if isinstance(row, Mapping) else None
-            )
-            for row in entities
-        }
-        self.assertEqual(
-            named.get("sensor.emhass_battery_power_emhass_sign_w"),
-            "Actual battery (EMHASS sign)",
-        )
+        self.assertTrue(actual.get("invert"))
+        self.assertEqual(actual.get("name"), "Actual battery (EMHASS sign)")
+        entity_ids = [row.get("entity") for row in series]
+        self.assertNotIn("sensor.emhass_battery_power_emhass_sign_w", entity_ids)
 
     def test_net_profit_7d_statistics_graph(self) -> None:
         cards = self.trading_view().get("cards", [])

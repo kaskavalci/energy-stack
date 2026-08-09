@@ -3,13 +3,13 @@
 **Last updated:** 2026-08-09
 **Author:** Composer
 
-## Plan vs battery overlay sign align — repo-only (2026-08-09)
+## Plan vs battery overlay sign align — DEPLOYED then revised (2026-08-09)
 
-Trading history-graph looked inverse because Sigen `plant_battery_power`
-(+charge/−discharge) is opposite EMHASS `p_batt_forecast` (−charge/+discharge).
-Added template `sensor.emhass_battery_power_emhass_sign_w` (= negated Sigen
-power) and pointed **Plan vs battery (24 h)** at it. Status card still shows
-raw Sigen power. Deployed 2026-08-09 ~16:40 CEST (backup energy-stack-20260809-164048); aligned history starts at deploy time.
+Trading overlay looked inverse: Sigen `plant_battery_power` (+charge/−discharge)
+vs EMHASS `p_batt_forecast` (−charge/+discharge). First fix used a new template
+sensor (lost recorder history). Revised: ApexCharts `invert: true` on the live
+Sigen entity so signs align and 24 h history stays. Status card still shows raw
+Sigen power.
 
 ## EMHASS actionable alert escalation — committed, not deployed (2026-08-09)
 

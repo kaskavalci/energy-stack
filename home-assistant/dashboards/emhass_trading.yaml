@@ -70,13 +70,33 @@ views:
           - entity: sensor.emhass_house_load_power_w
           - entity: sensor.p_load_forecast
 
-      - type: history-graph
-        title: Plan vs battery (24 h)
-        hours_to_show: 24
-        entities:
+      - type: custom:apexcharts-card
+        header:
+          show: true
+          title: Plan vs battery (24 h)
+          show_states: true
+          colorize_states: true
+        graph_span: 24h
+        yaxis:
+          - id: power
+            decimals: 0
+            apex_config:
+              title:
+                text: W
+        series:
           - entity: sensor.p_batt_forecast
-          - entity: sensor.emhass_battery_power_emhass_sign_w
+            name: Plan
+            type: line
+            stroke_width: 2
+            yaxis_id: power
+            unit: W
+          - entity: sensor.__SIGEN_PLANT_SLUG___plant_battery_power
             name: Actual battery (EMHASS sign)
+            type: line
+            stroke_width: 2
+            invert: true
+            yaxis_id: power
+            unit: W
 
       # PV actual and forecast
       - type: vertical-stack
