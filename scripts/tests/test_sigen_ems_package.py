@@ -462,6 +462,29 @@ class SigenReconnectReconciliationTests(unittest.TestCase):
         self.assertIn("service: script.sigen_disable_remote_ems", self.automation)
 
 
+class EmhassBatteryPowerSignAlignTests(unittest.TestCase):
+    """Sigen plant_battery_power (+charge) vs EMHASS p_batt (−charge)."""
+
+    def setUp(self) -> None:
+        self.package = DASHBOARD_PACKAGE_PATH.read_text(encoding="utf-8")
+
+    def test_aligned_overlay_sensor_negates_sigen_plant_power(self) -> None:
+        self.assertIn("unique_id: emhass_battery_power_emhass_sign_w", self.package)
+        self.assertIn(
+            "default_entity_id: sensor.emhass_battery_power_emhass_sign_w",
+            self.package,
+        )
+        block = self.package.split(
+            "      - name: EMHASS battery power (EMHASS sign)\n", 1
+        )[1]
+        state = block.split("state: >\n", 1)[1].split("\n\n", 1)[0]
+        self.assertIn(
+            "states('sensor.__SIGEN_PLANT_SLUG___plant_battery_power') | float(0)",
+            state,
+        )
+        self.assertIn("{{ (-p) | round(0) }}", state)
+
+
 class EmhassPlanValidityPresentationTests(unittest.TestCase):
     def setUp(self) -> None:
         self.package = (

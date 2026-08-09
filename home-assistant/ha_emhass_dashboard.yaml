@@ -35,6 +35,17 @@ template:
           {% set p = states('sensor.p_batt_forecast') | float(0) %}
           {{ ([p, 0] | max) | round(0) }}
 
+      # Sigen plant_battery_power: +charge / −discharge. EMHASS p_batt: −charge / +discharge.
+      - name: EMHASS battery power (EMHASS sign)
+        unique_id: emhass_battery_power_emhass_sign_w
+        default_entity_id: sensor.emhass_battery_power_emhass_sign_w
+        unit_of_measurement: W
+        device_class: power
+        state_class: measurement
+        state: >
+          {% set p = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_power') | float(0) %}
+          {{ (-p) | round(0) }}
+
       - name: EMHASS plan active step
         unique_id: emhass_plan_active_step
         default_entity_id: sensor.emhass_plan_active_step

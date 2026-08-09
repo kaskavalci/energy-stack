@@ -75,7 +75,8 @@ views:
         hours_to_show: 24
         entities:
           - entity: sensor.p_batt_forecast
-          - entity: sensor.__SIGEN_PLANT_SLUG___plant_battery_power
+          - entity: sensor.emhass_battery_power_emhass_sign_w
+            name: Actual battery (EMHASS sign)
 
       # PV actual and forecast
       - type: vertical-stack

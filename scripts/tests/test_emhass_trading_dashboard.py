@@ -307,6 +307,40 @@ class NativePvPanelTests(unittest.TestCase):
         ):
             self.assertNotIn(duplicate, entities)
 
+    def test_plan_vs_battery_uses_emhass_sign_aligned_actual(self) -> None:
+        """Sigen plant_battery_power is opposite EMHASS p_batt; overlay must flip."""
+        graph = next(
+            card
+            for card in self.trading_view().get("cards", [])
+            if isinstance(card, Mapping) and card.get("title") == "Plan vs battery (24 h)"
+        )
+        self.assertEqual(graph.get("type"), "history-graph")
+        entities = graph.get("entities")
+        self.assertIsInstance(entities, list)
+        entity_ids = [
+            row.get("entity") if isinstance(row, Mapping) else row for row in entities
+        ]
+        self.assertEqual(
+            entity_ids,
+            [
+                "sensor.p_batt_forecast",
+                "sensor.emhass_battery_power_emhass_sign_w",
+            ],
+        )
+        self.assertNotIn(
+            "sensor.__SIGEN_PLANT_SLUG___plant_battery_power", entity_ids
+        )
+        named = {
+            (row.get("entity") if isinstance(row, Mapping) else row): (
+                row.get("name") if isinstance(row, Mapping) else None
+            )
+            for row in entities
+        }
+        self.assertEqual(
+            named.get("sensor.emhass_battery_power_emhass_sign_w"),
+            "Actual battery (EMHASS sign)",
+        )
+
     def test_net_profit_7d_statistics_graph(self) -> None:
         cards = self.trading_view().get("cards", [])
         prices_idx = next(

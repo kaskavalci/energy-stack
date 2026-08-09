@@ -3,6 +3,14 @@
 **Last updated:** 2026-08-09
 **Author:** Composer
 
+## Plan vs battery overlay sign align — repo-only (2026-08-09)
+
+Trading history-graph looked inverse because Sigen `plant_battery_power`
+(+charge/−discharge) is opposite EMHASS `p_batt_forecast` (−charge/+discharge).
+Added template `sensor.emhass_battery_power_emhass_sign_w` (= negated Sigen
+power) and pointed **Plan vs battery (24 h)** at it. Status card still shows
+raw Sigen power. Needs HA deploy; aligned history starts at deploy time.
+
 ## EMHASS actionable alert escalation — committed, not deployed (2026-08-09)
 
 Branch `feature/emhass-actionable-alert-escalation`: phone only after
