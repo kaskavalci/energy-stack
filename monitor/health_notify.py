@@ -23,6 +23,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 LOAD_HISTORY_STATE_KEY = "_load_history_incident"
+LOAD_HISTORY_ROOT_ENTITY = "input_boolean.emhass_load_history_root_active"
+OWNERSHIP_STATE_KEY = "_load_history_root_ownership"
 
 
 from weather_cache_stale import (
@@ -38,9 +40,11 @@ DEFAULT_EMAHASS_BASE = os.environ.get("EMAHASS_BASE_URL", "http://emhass:5000").
 DEFAULT_NOTIFY = os.environ.get("HA_NOTIFY_SERVICE", "notify.notify")
 DEFAULT_COOLDOWN_SEC = int(os.environ.get("ALERT_COOLDOWN_SEC", "7200"))
 DEFAULT_FAILURE_THRESHOLD = int(os.environ.get("ALERT_FAILURE_THRESHOLD", "2"))
+MPC_ESCALATION_SEC = 60 * 60
 TZ = ZoneInfo(os.environ.get("TZ", "Europe/Amsterdam"))
 
 B5_SUSTAINED_IDS = frozenset({"B5_cache", "B5_zero_fill"})
+HARD_ALERT_IDS = frozenset({"A4", "A6", "B1"})
 
 CONTAINERS = ("emhass", "emhass-cron")
 EMHASS_CONTAINER = os.environ.get("EMHASS_CONTAINER", "emhass")
@@ -72,16 +76,15 @@ def load_ha_config(secrets_path: Path) -> tuple[str, str]:
     return url, token
 
 
-def notify_ha(
+def call_ha_service(
     base_url: str,
     token: str,
     service: str,
-    title: str,
-    message: str,
+    data: dict,
 ) -> None:
     domain, _, name = service.partition(".")
     url = f"{base_url}api/services/{domain}/{name}"
-    body = json.dumps({"title": title, "message": message}).encode("utf-8")
+    body = json.dumps(data).encode("utf-8")
     req = urllib.request.Request(
         url,
         data=body,
@@ -95,6 +98,163 @@ def notify_ha(
         resp.read()
 
 
+def notify_ha(
+    base_url: str,
+    token: str,
+    service: str,
+    title: str,
+    message: str,
+) -> None:
+    call_ha_service(
+        base_url,
+        token,
+        service,
+        {"title": title, "message": message},
+    )
+
+
+def log_ha_event(
+    *,
+    incident_id: str,
+    phase: str,
+    message: str,
+    base_url: str,
+    token: str,
+    action: str = "",
+) -> bool:
+    try:
+        call_ha_service(
+            base_url,
+            token,
+            "script.emhass_log_event",
+            {
+                "incident_id": incident_id,
+                "phase": phase,
+                "message": message,
+                "action": action or "",
+            },
+        )
+        return True
+    except Exception as exc:
+        logging.error(
+            "HA event log failed %s phase=%s: %s",
+            incident_id,
+            phase,
+            exc,
+        )
+        return False
+
+
+def sync_load_history_root_ownership(
+    active: bool,
+    *,
+    base_url: str,
+    token: str,
+) -> bool:
+    """Publish B6 root ownership so HA can suppress derivative C2a/E1 phones."""
+    service = (
+        "input_boolean.turn_on" if active else "input_boolean.turn_off"
+    )
+    try:
+        call_ha_service(
+            base_url,
+            token,
+            service,
+            {"entity_id": LOAD_HISTORY_ROOT_ENTITY},
+        )
+        return True
+    except Exception as exc:
+        logging.error(
+            "HA load-history root ownership sync failed active=%s: %s",
+            active,
+            exc,
+        )
+        return False
+
+
+def set_load_history_root_ownership(
+    alert_state: dict[str, AlertState],
+    *,
+    desired_active: bool,
+    base_url: str,
+    token: str,
+) -> bool:
+    """Set desired B6 ownership and sync to HA; keep pending on failure."""
+    entry = alert_state.setdefault(OWNERSHIP_STATE_KEY, AlertState())
+    entry.ownership_desired_active = desired_active
+    ok = sync_load_history_root_ownership(
+        desired_active,
+        base_url=base_url,
+        token=token,
+    )
+    entry.ownership_pending = not ok
+    return ok
+
+
+def flush_load_history_root_ownership(
+    alert_state: dict[str, AlertState],
+    *,
+    base_url: str,
+    token: str,
+) -> bool:
+    """Retry a pending ownership sync until HA accepts it."""
+    entry = alert_state.get(OWNERSHIP_STATE_KEY)
+    if entry is None or not entry.ownership_pending:
+        return True
+    if entry.ownership_desired_active is None:
+        entry.ownership_pending = False
+        return True
+    ok = sync_load_history_root_ownership(
+        entry.ownership_desired_active,
+        base_url=base_url,
+        token=token,
+    )
+    entry.ownership_pending = not ok
+    return ok
+
+
+def load_history_root_is_active(alert_state: dict[str, AlertState]) -> bool:
+    incident = alert_state.get(LOAD_HISTORY_STATE_KEY)
+    if incident is not None and incident.incident_mode in ("degraded", "unsafe"):
+        return True
+    return any(
+        key.startswith("B6_") and entry.phase is not None
+        for key, entry in alert_state.items()
+    )
+
+
+_SIGNATURE_BODY_KEYS = frozenset({"message", "title", "action"})
+
+
+def incident_signature(alert_id: str, context: dict) -> str:
+    """Stable dedup key: alert id + non-body context (never age-bearing message text)."""
+    stable_context = {
+        key: value
+        for key, value in context.items()
+        if key not in _SIGNATURE_BODY_KEYS
+    }
+    if not stable_context:
+        stable_context = {"kind": alert_id}
+    payload = {
+        "alert_id": alert_id,
+        "context": stable_context,
+    }
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def is_recoverable_alert(alert_id: str) -> bool:
+    if alert_id in HARD_ALERT_IDS or alert_id == LOAD_HISTORY_STATE_KEY:
+        return False
+    if alert_id in {"B2", "B3", "B4"}:
+        return True
+    return alert_id.startswith(("B2_", "B5_", "B6_"))
+
+
 def _dedup_path(share: Path) -> Path:
     return share / "monitor_alert_state.json"
 
@@ -105,6 +265,12 @@ class AlertState:
     consecutive_failures: int = 0
     incident_mode: str | None = None
     incident_signature: str | None = None
+    phase: str | None = None
+    first_detected: float | None = None
+    notification_signature: str | None = None
+    escalation_deadline: float | None = None
+    ownership_desired_active: bool | None = None
+    ownership_pending: bool = False
 
 
 @dataclass(frozen=True)
@@ -120,11 +286,28 @@ def _parse_alert_entry(val: object) -> AlertState:
     if isinstance(val, (int, float)):
         return AlertState(last_notify=float(val))
     if isinstance(val, dict):
+        first_detected = val.get("first_detected")
+        escalation_deadline = val.get("escalation_deadline")
+        desired = val.get("ownership_desired_active")
         return AlertState(
             last_notify=float(val.get("last_notify", 0) or 0),
             consecutive_failures=int(val.get("consecutive_failures", 0) or 0),
             incident_mode=val.get("incident_mode"),
             incident_signature=val.get("incident_signature"),
+            phase=val.get("phase"),
+            first_detected=(
+                float(first_detected) if first_detected is not None else None
+            ),
+            notification_signature=val.get("notification_signature"),
+            escalation_deadline=(
+                float(escalation_deadline)
+                if escalation_deadline is not None
+                else None
+            ),
+            ownership_desired_active=(
+                None if desired is None else bool(desired)
+            ),
+            ownership_pending=bool(val.get("ownership_pending", False)),
         )
     return AlertState()
 
@@ -134,6 +317,19 @@ def _atomic_write_text(path: Path, content: str) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(content, encoding="utf-8")
     tmp.replace(path)
+
+
+def _escalation_fields(entry: AlertState) -> dict[str, object]:
+    fields: dict[str, object] = {}
+    if entry.phase is not None:
+        fields["phase"] = entry.phase
+    if entry.first_detected is not None:
+        fields["first_detected"] = entry.first_detected
+    if entry.escalation_deadline is not None:
+        fields["escalation_deadline"] = entry.escalation_deadline
+    if entry.notification_signature is not None:
+        fields["notification_signature"] = entry.notification_signature
+    return fields
 
 
 def load_alert_state(share: Path) -> dict[str, AlertState]:
@@ -152,20 +348,177 @@ def load_alert_state(share: Path) -> dict[str, AlertState]:
 def persist_alert_state(share: Path, state: dict[str, AlertState]) -> None:
     raw: dict[str, object] = {}
     for key, entry in state.items():
-        if key == LOAD_HISTORY_STATE_KEY:
+        escalation = _escalation_fields(entry)
+        if key == OWNERSHIP_STATE_KEY:
             raw[key] = {
+                "ownership_desired_active": entry.ownership_desired_active,
+                "ownership_pending": entry.ownership_pending,
+            }
+        elif key == LOAD_HISTORY_STATE_KEY:
+            payload: dict[str, object] = {
                 "last_notify": entry.last_notify,
                 "incident_mode": entry.incident_mode,
                 "incident_signature": entry.incident_signature,
             }
+            payload.update(escalation)
+            raw[key] = payload
         elif key in B5_SUSTAINED_IDS:
-            raw[key] = {
+            payload = {
                 "last_notify": entry.last_notify,
                 "consecutive_failures": entry.consecutive_failures,
             }
+            payload.update(escalation)
+            raw[key] = payload
+        elif escalation:
+            payload = {"last_notify": entry.last_notify}
+            payload.update(escalation)
+            raw[key] = payload
         elif entry.last_notify:
             raw[key] = entry.last_notify
     _atomic_write_text(_dedup_path(share), json.dumps(raw, indent=2))
+
+
+def clear_recoverable_fields(entry: AlertState) -> None:
+    entry.phase = None
+    entry.first_detected = None
+    entry.escalation_deadline = None
+    entry.notification_signature = None
+
+
+def record_recoverable_incident(
+    state: dict[str, AlertState],
+    *,
+    alert_id: str,
+    context: dict,
+    now: float,
+    base_url: str,
+    token: str,
+) -> bool:
+    signature = incident_signature(alert_id, context)
+    entry = state.setdefault(alert_id, AlertState())
+    if (
+        entry.phase in ("detected", "recovering", "actionable")
+        and entry.notification_signature == signature
+    ):
+        return True
+    message = str(context.get("message", ""))
+    entry.phase = "detected"
+    entry.first_detected = now
+    entry.escalation_deadline = now + MPC_ESCALATION_SEC
+    entry.notification_signature = signature
+    return log_ha_event(
+        incident_id=alert_id,
+        phase="detected",
+        message=message,
+        base_url=base_url,
+        token=token,
+    )
+
+
+def should_escalate_recoverable(
+    entry: AlertState,
+    *,
+    alert_id: str,
+    now: float,
+    failure_threshold: int = DEFAULT_FAILURE_THRESHOLD,
+) -> bool:
+    del alert_id, failure_threshold  # reserved for callers; deadline-only gate
+    if entry.phase == "actionable":
+        return False
+    if entry.phase not in ("detected", "recovering"):
+        return False
+    # Recoverable phone gate is the approved 60-minute deadline only.
+    # Do not treat monitor poll consecutive_failures as "scheduled failures"
+    # (monitor cadence is 10 min; two polls ≈ 20 min).
+    deadline = entry.escalation_deadline
+    if deadline is None:
+        if entry.first_detected is None:
+            return False
+        deadline = entry.first_detected + MPC_ESCALATION_SEC
+    return now >= deadline
+
+
+def process_recoverable_escalation(
+    state: dict[str, AlertState],
+    *,
+    alert_id: str,
+    title: str,
+    message: str,
+    now: float,
+    base_url: str,
+    token: str,
+    service: str,
+    context: dict | None = None,
+    failure_threshold: int = DEFAULT_FAILURE_THRESHOLD,
+) -> bool:
+    entry = state.get(alert_id)
+    if entry is None:
+        return False
+    sig_context = dict(context or {})
+    if "message" not in sig_context:
+        sig_context["message"] = message
+    signature = incident_signature(alert_id, sig_context)
+    if (
+        entry.phase == "actionable"
+        and entry.notification_signature == signature
+    ):
+        return False
+    if not should_escalate_recoverable(
+        entry,
+        alert_id=alert_id,
+        now=now,
+        failure_threshold=failure_threshold,
+    ):
+        return False
+    try:
+        notify_ha(
+            base_url,
+            token,
+            service,
+            f"Energy: {title}",
+            message,
+        )
+    except Exception as exc:
+        logging.error("HA notify failed %s: %s", alert_id, exc)
+        return False
+    entry.phase = "actionable"
+    entry.last_notify = now
+    entry.notification_signature = signature
+    log_ha_event(
+        incident_id=alert_id,
+        phase="actionable",
+        message=message,
+        base_url=base_url,
+        token=token,
+        action="Investigate energy-host monitor alert and restore MPC.",
+    )
+    return True
+
+
+def process_recoverable_recovery(
+    state: dict[str, AlertState],
+    *,
+    alert_id: str,
+    message: str,
+    now: float,
+    base_url: str,
+    token: str,
+) -> bool:
+    del now  # recovery is immediate when clear
+    entry = state.get(alert_id)
+    if entry is None or entry.phase is None:
+        return False
+    logged = log_ha_event(
+        incident_id=alert_id,
+        phase="resolved",
+        message=message,
+        base_url=base_url,
+        token=token,
+    )
+    if not logged:
+        return False
+    clear_recoverable_fields(entry)
+    return True
 
 
 def normalize_load_history_error(error: str) -> str:
@@ -253,15 +606,28 @@ def detect_load_history_transition(
                 f"{missing} missing bin(s), {duration} minutes."
             ),
         )
+    error_l = str(mpc.get("error", "")).lower()
+    if missing > 0:
+        unsafe_message = (
+            f"MPC is fail-closed for {missing} missing bin(s); "
+            "Sigenergy remains in native self-consumption."
+        )
+    elif "stale" in error_l:
+        unsafe_message = (
+            "MPC is fail-closed because the load-history sample is stale; "
+            "Sigenergy remains in native self-consumption."
+        )
+    else:
+        unsafe_message = (
+            "MPC is fail-closed for unsafe load history; "
+            "Sigenergy remains in native self-consumption."
+        )
     return LoadHistoryTransition(
         mode=mode,
         signature=signature,
         alert_id="B6_load_history_unsafe",
         title="EMHASS load history unsafe",
-        message=(
-            f"MPC is fail-closed for {missing} missing bin(s); "
-            "Sigenergy remains in native self-consumption."
-        ),
+        message=unsafe_message,
     )
 
 
@@ -279,6 +645,8 @@ def apply_load_history_transition(
 def suppress_load_history_derivatives(
     failures: list[tuple[str, str, str]],
     mpc: dict,
+    *,
+    on_suppress: object | None = None,
 ) -> list[tuple[str, str, str]]:
     load_history = mpc.get("load_history")
     if not (
@@ -288,11 +656,15 @@ def suppress_load_history_derivatives(
         and load_history.get("mode") in ("degraded", "unsafe")
     ):
         return failures
-    suppressed = {"B2_mpc", "B3", "B5_cache"}
-    return [
-        failure for failure in failures
-        if failure[0] not in suppressed
-    ]
+    suppressed_ids = {"B2_mpc", "B3", "B5_cache"}
+    kept: list[tuple[str, str, str]] = []
+    for failure in failures:
+        if failure[0] in suppressed_ids:
+            if callable(on_suppress):
+                on_suppress(failure)
+            continue
+        kept.append(failure)
+    return kept
 
 
 def read_mpc_block(share: Path) -> dict | None:
@@ -307,6 +679,59 @@ def read_mpc_block(share: Path) -> dict | None:
     return mpc if isinstance(mpc, dict) else None
 
 
+def _clear_other_b6_incidents(
+    alert_state: dict[str, AlertState],
+    *,
+    keep_alert_id: str | None,
+) -> None:
+    for key, entry in list(alert_state.items()):
+        if not key.startswith("B6_"):
+            continue
+        if keep_alert_id is not None and key == keep_alert_id:
+            continue
+        if entry.phase is not None:
+            clear_recoverable_fields(entry)
+
+
+def _b6_record_context(transition: LoadHistoryTransition) -> dict:
+    return {
+        "kind": transition.mode,
+        "load_signature": transition.signature,
+        "message": transition.message,
+    }
+
+
+def _backfill_legacy_b6_incident(
+    alert_state: dict[str, AlertState],
+    *,
+    incident: AlertState,
+    transition: LoadHistoryTransition,
+    now: float,
+    base_url: str,
+    token: str,
+) -> bool:
+    """Create recoverable B6 state from root-only legacy load-history tracking."""
+    entry = alert_state.get(transition.alert_id)
+    if entry is not None and entry.phase is not None:
+        return False
+    anchor = incident.last_notify if incident.last_notify else now
+    context = _b6_record_context(transition)
+    signature = incident_signature(transition.alert_id, context)
+    entry = alert_state.setdefault(transition.alert_id, AlertState())
+    entry.phase = "detected"
+    entry.first_detected = anchor
+    entry.escalation_deadline = anchor + MPC_ESCALATION_SEC
+    entry.notification_signature = signature
+    log_ha_event(
+        incident_id=transition.alert_id,
+        phase="detected",
+        message=transition.message,
+        base_url=base_url,
+        token=token,
+    )
+    return True
+
+
 def process_load_history_transition(
     alert_state: dict[str, AlertState],
     mpc: dict | None,
@@ -315,50 +740,171 @@ def process_load_history_transition(
     token: str,
     service: str,
     now: float,
+    suppressed_failures: list[tuple[str, str, str]] | None = None,
 ) -> bool:
     if mpc is None:
         return False
+    flush_load_history_root_ownership(
+        alert_state,
+        base_url=base_url,
+        token=token,
+    )
     incident = alert_state.setdefault(
         LOAD_HISTORY_STATE_KEY,
         AlertState(),
     )
     transition = detect_load_history_transition(mpc, incident)
-    if transition is None:
-        return False
-    try:
-        notify_ha(
-            base_url,
-            token,
-            service,
-            f"Energy: {transition.title}",
-            transition.message,
+    acted = False
+
+    if transition is not None and transition.mode == "healthy":
+        open_b6 = [
+            key
+            for key, entry in alert_state.items()
+            if key.startswith("B6_") and entry.phase is not None
+        ]
+        recovered_ok = True
+        if open_b6:
+            for key in open_b6:
+                if not process_recoverable_recovery(
+                    alert_state,
+                    alert_id=key,
+                    message=transition.message,
+                    now=now,
+                    base_url=base_url,
+                    token=token,
+                ):
+                    recovered_ok = False
+        elif incident.incident_mode in ("degraded", "unsafe"):
+            recovered_ok = log_ha_event(
+                incident_id=transition.alert_id,
+                phase="resolved",
+                message=transition.message,
+                base_url=base_url,
+                token=token,
+            )
+        if not recovered_ok:
+            return False
+        apply_load_history_transition(
+            incident,
+            transition,
+            notified_at=now,
         )
-    except urllib.error.HTTPError as exc:
-        logging.error(
-            "HA notify failed %s: %s %s",
-            transition.alert_id,
-            exc.code,
-            exc.read()[:200],
+        set_load_history_root_ownership(
+            alert_state,
+            desired_active=False,
+            base_url=base_url,
+            token=token,
         )
-        return False
-    except Exception as exc:
-        logging.error(
-            "HA notify failed %s: %s",
-            transition.alert_id,
-            exc,
+        return True
+
+    if transition is not None:
+        apply_load_history_transition(
+            incident,
+            transition,
+            notified_at=now,
         )
-        return False
-    apply_load_history_transition(
-        incident,
-        transition,
-        notified_at=now,
-    )
-    logging.info(
-        "Notified HA: %s — %s",
-        transition.alert_id,
-        transition.message[:120],
-    )
-    return True
+        _clear_other_b6_incidents(
+            alert_state,
+            keep_alert_id=transition.alert_id,
+        )
+        record_recoverable_incident(
+            alert_state,
+            alert_id=transition.alert_id,
+            context=_b6_record_context(transition),
+            now=now,
+            base_url=base_url,
+            token=token,
+        )
+        set_load_history_root_ownership(
+            alert_state,
+            desired_active=True,
+            base_url=base_url,
+            token=token,
+        )
+        if suppressed_failures:
+            for alert_id, _title, message in suppressed_failures:
+                log_ha_event(
+                    incident_id=alert_id,
+                    phase="detected",
+                    message=(
+                        "Suppressed under load-history root cause: "
+                        f"{message}"
+                    ),
+                    base_url=base_url,
+                    token=token,
+                )
+        acted = True
+
+    load_history = mpc.get("load_history")
+    if not (
+        isinstance(load_history, dict)
+        and load_history.get("mode") in ("degraded", "unsafe")
+    ):
+        # Healthy/no-load path: still retry a pending turn_off.
+        flush_load_history_root_ownership(
+            alert_state,
+            base_url=base_url,
+            token=token,
+        )
+        return acted
+
+    probe = detect_load_history_transition(mpc, AlertState())
+    if probe is None or probe.mode not in ("degraded", "unsafe"):
+        flush_load_history_root_ownership(
+            alert_state,
+            base_url=base_url,
+            token=token,
+        )
+        return acted
+
+    b6_entry = alert_state.get(probe.alert_id)
+    if (
+        incident.incident_mode == probe.mode
+        and (b6_entry is None or b6_entry.phase is None)
+    ):
+        if _backfill_legacy_b6_incident(
+            alert_state,
+            incident=incident,
+            transition=probe,
+            now=now,
+            base_url=base_url,
+            token=token,
+        ):
+            set_load_history_root_ownership(
+                alert_state,
+                desired_active=True,
+                base_url=base_url,
+                token=token,
+            )
+            acted = True
+
+    if load_history_root_is_active(alert_state):
+        set_load_history_root_ownership(
+            alert_state,
+            desired_active=True,
+            base_url=base_url,
+            token=token,
+        )
+    else:
+        flush_load_history_root_ownership(
+            alert_state,
+            base_url=base_url,
+            token=token,
+        )
+
+    if process_recoverable_escalation(
+        alert_state,
+        alert_id=probe.alert_id,
+        title=probe.title,
+        message=probe.message,
+        now=now,
+        base_url=base_url,
+        token=token,
+        service=service,
+        context=_b6_record_context(probe),
+    ):
+        acted = True
+    return acted
 
 
 def record_b5_outcomes(state: dict[str, AlertState], failing_ids: set[str]) -> None:
@@ -664,8 +1210,14 @@ def main() -> int:
         ]
 
     mpc = read_mpc_block(share)
+    suppressed_failures: list[tuple[str, str, str]] = []
     if mpc is not None:
+        before = list(failures)
         failures = suppress_load_history_derivatives(failures, mpc)
+        suppressed_ids = {item[0] for item in failures}
+        suppressed_failures = [
+            item for item in before if item[0] not in suppressed_ids
+        ]
 
     failing_ids = {alert_id for alert_id, _, _ in failures}
     alert_state = load_alert_state(share)
@@ -679,11 +1231,36 @@ def main() -> int:
         token=token,
         service=notify_svc,
         now=now,
+        suppressed_failures=suppressed_failures,
     )
 
     sent = 0
     for alert_id, title, message in failures:
         entry = alert_state.setdefault(alert_id, AlertState())
+        if is_recoverable_alert(alert_id):
+            # Always log/record on first detection and start the 60 min clock.
+            record_recoverable_incident(
+                alert_state,
+                alert_id=alert_id,
+                context={"message": message},
+                now=now,
+                base_url=base_url,
+                token=token,
+            )
+            if process_recoverable_escalation(
+                alert_state,
+                alert_id=alert_id,
+                title=title,
+                message=message,
+                now=now,
+                base_url=base_url,
+                token=token,
+                service=notify_svc,
+                failure_threshold=failure_threshold,
+            ):
+                sent += 1
+            continue
+
         ok, skip_reason = can_notify(
             entry,
             alert_id,
@@ -707,6 +1284,24 @@ def main() -> int:
             logging.error("HA notify failed %s: %s %s", alert_id, exc.code, exc.read()[:200])
         except Exception as exc:
             logging.error("HA notify failed %s: %s", alert_id, exc)
+
+    for alert_id, entry in list(alert_state.items()):
+        if not is_recoverable_alert(alert_id):
+            continue
+        if entry.phase is None:
+            continue
+        if alert_id.startswith("B6_"):
+            continue
+        if alert_id in failing_ids:
+            continue
+        process_recoverable_recovery(
+            alert_state,
+            alert_id=alert_id,
+            message=f"{alert_id} recovered",
+            now=now,
+            base_url=base_url,
+            token=token,
+        )
 
     persist_alert_state(share, alert_state)
 

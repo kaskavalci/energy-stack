@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import unittest
 from pathlib import Path
 
@@ -54,6 +55,341 @@ class SigenActiveLimitClampTests(unittest.TestCase):
             "[requested_kw | float(0), device_max_kw | float(0)] | min",
             discharge,
         )
+
+
+D2_CONTROL_FAILURE_REASONS = frozenset({"stale_plan", "bad_optim"})
+RESTORE_CALLER_REASONS = {
+    "sigen_disable_remote_ems": ("master_off",),
+    "emhass_sigen_kill_switch_off": ("master_off",),
+    "emhass_sigen_enforce_master_off": ("startup_or_reconnect",),
+    "emhass_sigen_disable_on_stale_plan": ("stale_plan",),
+    "emhass_sigen_disable_on_bad_optim": ("bad_optim",),
+    "emhass_soc_floor_cutout": ("soc_floor",),
+    "emhass_recovery_reconcile": ("recovery", "recovery", "recovery"),
+}
+
+
+def restore_service_calls(text: str) -> list[str]:
+    calls: list[str] = []
+    for match in re.finditer(
+        r"^(?P<indent>\s*)- service: script\.sigen_restore_native_control\n"
+        r"(?P<body>.*?)(?=^(?P=indent)- |\Z)",
+        text,
+        re.S | re.M,
+    ):
+        calls.append(match.group("body"))
+    return calls
+
+
+def restore_call_reason(call_block: str) -> str | None:
+    match = re.search(r"reason:\s*(\w+)", call_block)
+    return match.group(1) if match else None
+
+
+def disable_remote_ems_calls(text: str) -> list[str]:
+    calls: list[str] = []
+    for match in re.finditer(
+        r"^(?P<indent>\s*)- service: script\.sigen_disable_remote_ems\n"
+        r"(?P<body>.*?)(?=^(?P=indent)- |\Z)",
+        text,
+        re.S | re.M,
+    ):
+        calls.append(match.group("body"))
+    return calls
+
+
+def disable_call_reason(call_block: str) -> str | None:
+    match = re.search(r"reason:\s*(\w+)", call_block)
+    return match.group(1) if match else None
+
+
+RESTORE_AUTOMATION_NEXT = {
+    "emhass_sigen_kill_switch_off": "emhass_sigen_enforce_master_off",
+    "emhass_sigen_enforce_master_off": "emhass_sigen_apply_plan_scheduled",
+    "emhass_sigen_disable_on_stale_plan": "emhass_sigen_disable_on_bad_optim",
+    "emhass_sigen_disable_on_bad_optim": "emhass_soc_floor_cutout",
+    "emhass_soc_floor_cutout": "emhass_recovery_start",
+    # Last automation today; still next-id bounded when a later id appears.
+    "emhass_recovery_reconcile": None,
+}
+DISABLE_REMOTE_EMS_REASON_CALLERS = frozenset(
+    {
+        "emhass_sigen_kill_switch_off",
+        "emhass_sigen_enforce_master_off",
+    }
+)
+
+CONTROL_FAILURE_GATE_RE = re.compile(
+    r"reason in control_failure_reasons"
+    r"|reason in \['stale_plan',\s*'bad_optim'\]"
+)
+
+
+def automation_block_bounded(
+    automation_id: str,
+    next_automation_id: str | None = None,
+) -> str:
+    """Return one automation body, cut at the next id or explicit successor."""
+    body = package_text().split(f"  - id: {automation_id}\n", 1)[1]
+    if next_automation_id is not None:
+        return body.split(f"  - id: {next_automation_id}\n", 1)[0]
+    next_id = body.find("\n  - id: ")
+    if next_id == -1:
+        return body
+    return body[:next_id]
+
+
+def choose_branch_and_default(choose_body: str, choose_indent: str) -> tuple[str, str]:
+    default_key = f"{choose_indent}  default:\n"
+    if default_key not in choose_body:
+        return choose_body, ""
+    branches, default = choose_body.split(default_key, 1)
+    return branches, default
+
+
+def iter_choose_blocks(text: str) -> list[tuple[str, str]]:
+    """Yield (branches_text, default_text) for each top-level `- choose:` block."""
+    blocks: list[tuple[str, str]] = []
+    for match in re.finditer(r"^(?P<indent>\s*)- choose:\n", text, re.M):
+        indent = match.group("indent")
+        rest = text[match.end() :]
+        end = re.search(rf"^{re.escape(indent)}- ", rest, re.M)
+        body = rest if end is None else rest[: end.start()]
+        blocks.append(choose_branch_and_default(body, indent))
+    return blocks
+
+
+class SigenRestoreReasonContractTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.package = package_text()
+        self.restore = script_block(
+            "sigen_restore_native_control", "sigen_disable_remote_ems"
+        )
+
+    def test_restore_script_declares_reason_field(self) -> None:
+        self.assertIn("fields:", self.restore)
+        reason_block = self.restore.split("reason:", 1)[1]
+        self.assertIn("selector:", reason_block)
+        self.assertIn("default: unknown", self.restore)
+
+    def test_every_restore_caller_passes_reason(self) -> None:
+        for automation_id, expected_reasons in RESTORE_CALLER_REASONS.items():
+            if automation_id == "sigen_disable_remote_ems":
+                block = script_block(
+                    automation_id, "sigen_clear_recovery"
+                )
+            elif automation_id in RESTORE_AUTOMATION_NEXT:
+                block = automation_block_bounded(
+                    automation_id,
+                    RESTORE_AUTOMATION_NEXT[automation_id],
+                )
+            else:
+                self.fail(f"unknown restore caller mapping for {automation_id}")
+            with self.subTest(automation_id=automation_id):
+                if automation_id == "sigen_disable_remote_ems":
+                    self.assertIn("default: master_off", block)
+                    calls = restore_service_calls(block)
+                    self.assertEqual(len(calls), 1)
+                    self.assertIn('reason: "{{ reason }}"', calls[0])
+                    continue
+                if automation_id in DISABLE_REMOTE_EMS_REASON_CALLERS:
+                    disable_calls = disable_remote_ems_calls(block)
+                    self.assertEqual(len(disable_calls), 1)
+                    self.assertEqual(
+                        disable_call_reason(disable_calls[0]),
+                        expected_reasons[0],
+                    )
+                    continue
+                calls = restore_service_calls(block)
+                self.assertEqual(
+                    len(calls),
+                    len(expected_reasons),
+                    msg=f"restore call count mismatch in {automation_id}",
+                )
+                for index, (call, expected_reason) in enumerate(
+                    zip(calls, expected_reasons)
+                ):
+                    with self.subTest(automation_id=automation_id, call_index=index):
+                        self.assertEqual(
+                            restore_call_reason(call),
+                            expected_reason,
+                            msg=f"restore call {index} missing reason in {automation_id}",
+                        )
+
+    def test_idle_apply_plan_restore_passes_idle_reason(self) -> None:
+        apply = self.package.split("  sigen_apply_emhass_plan:\n", 1)[1].split(
+            "\nautomation:\n", 1
+        )[0]
+        calls = restore_service_calls(apply)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(restore_call_reason(calls[0]), "idle")
+
+    def test_timeout_text_uses_live_master_mode_and_limit_state(self) -> None:
+        self.assertNotIn("Master is off, but", self.restore)
+        self.assertIn("input_boolean.emhass_auto_control_master", self.restore)
+        self.assertIn(
+            "select.__SIGEN_PLANT_SLUG___plant_remote_ems_control_mode",
+            self.restore,
+        )
+        self.assertIn(
+            "number.__SIGEN_PLANT_SLUG___plant_max_charging_limit",
+            self.restore,
+        )
+
+    def test_d2_signature_contains_reason_and_phase(self) -> None:
+        self.assertIn("input_text.emhass_d2_failure_signature", self.package)
+        self.assertIn("input_datetime.emhass_d2_last_failure", self.package)
+        self.assertIn("input_number.emhass_d2_failure_count", self.package)
+        self.assertIn("emhass_d2_failure_signature", self.restore)
+        self.assertIn("{{ reason ~ '|' ~ phase }}", self.restore)
+        self.assertIn("native_mode_confirmation", self.restore)
+        self.assertIn("limit_confirmation", self.restore)
+
+    def test_d2_same_context_escalation_dedupe_and_resolve(self) -> None:
+        """Second same-signature timeout within 10 min may phone; duplicates suppress."""
+        self.assertIn("10 * 60", self.restore)
+        self.assertIn("previous_count == 1", self.restore)
+        self.assertIn("previous_count >= 2", self.restore)
+        self.assertIn("input_boolean.emhass_d2_actionable_notified", self.restore)
+        self.assertIn("phase: recovering", self.restore)
+        self.assertIn("phase: actionable", self.restore)
+        self.assertIn("phase: suppressed", self.restore)
+        self.assertIn("phase: resolved", self.restore)
+        self.assertIn("input_number.emhass_d2_failure_count", self.restore)
+        self.assertRegex(
+            self.restore,
+            r"entity_id: input_number\.emhass_d2_failure_count\n"
+            r"(?:.*\n){0,3}\s+value: 0",
+        )
+        self.assertRegex(
+            self.restore,
+            r"entity_id: input_text\.emhass_d2_failure_signature\n"
+            r"(?:.*\n){0,3}\s+value: \"\"",
+        )
+        # Phone-sent marker must arm before helper writes.
+        for title in (
+            "EMHASS D2: Native fallback unconfirmed",
+            "EMHASS D2: Native fallback limits unconfirmed",
+        ):
+            marker = f'title: "{title}"'
+            self.assertIn(marker, self.restore)
+            after_title = self.restore.split(marker, 1)[1]
+            turn_on_pos = after_title.index(
+                "entity_id: input_boolean.emhass_d2_actionable_notified"
+            )
+            sig_pos = after_title.index(
+                "entity_id: input_text.emhass_d2_failure_signature"
+            )
+            self.assertLess(turn_on_pos, sig_pos)
+            between = after_title[:sig_pos]
+            self.assertIn("input_boolean.turn_on", between)
+            self.assertNotIn("continue_on_error: true", between)
+
+    def test_intentional_reasons_do_not_use_phone_alert_path(self) -> None:
+        timeout_section = self.restore.split("continue_on_timeout: true", 1)[1]
+        direct_push = re.search(
+            r"not wait\.completed.*?then:\s*\n\s*- service: script\.emhass_push_alert",
+            timeout_section,
+            re.S,
+        )
+        self.assertIsNone(
+            direct_push,
+            "timeout must not call push_alert unconditionally; "
+            "intentional reasons use log_event only",
+        )
+        self.assertIn("script.emhass_log_event", timeout_section)
+        self.assertNotIn("intentional_reasons:", timeout_section)
+        for reason in D2_CONTROL_FAILURE_REASONS:
+            with self.subTest(reason=reason):
+                self.assertIn(f"'{reason}'", timeout_section)
+
+        chooses = iter_choose_blocks(timeout_section)
+        self.assertGreaterEqual(
+            len(chooses),
+            1,
+            "timeout handling must use choose for phone gating",
+        )
+        for choose_idx, (branches, default) in enumerate(chooses):
+            with self.subTest(choose_index=choose_idx):
+                self.assertNotIn(
+                    "script.emhass_push_alert",
+                    default,
+                    "choose default must not phone; intentional/recovering path is log-only",
+                )
+                for push in re.finditer(
+                    r"service: script\.emhass_push_alert",
+                    branches,
+                ):
+                    preceding = branches[: push.start()]
+                    cond_pos = preceding.rfind("- conditions:")
+                    self.assertNotEqual(
+                        cond_pos,
+                        -1,
+                        "push_alert must sit under a choose branch with conditions",
+                    )
+                    branch_gate = preceding[cond_pos:push.start()]
+                    self.assertRegex(
+                        branch_gate,
+                        CONTROL_FAILURE_GATE_RE,
+                        "push_alert branch must gate on control-failure reasons",
+                    )
+                    # Notify first; advance D2 helpers only after successful push.
+                    seq_pos = preceding.rfind("sequence:")
+                    self.assertNotEqual(seq_pos, -1)
+                    seq = branches[seq_pos:]
+                    next_branch = seq.find("\n              - conditions:")
+                    if next_branch != -1:
+                        seq = seq[:next_branch]
+                    push_in_seq = seq.index("service: script.emhass_push_alert")
+                    marker_in_seq = seq.index(
+                        "entity_id: input_boolean.emhass_d2_actionable_notified"
+                    )
+                    sig_in_seq = seq.index(
+                        "entity_id: input_text.emhass_d2_failure_signature"
+                    )
+                    count_in_seq = seq.index(
+                        "entity_id: input_number.emhass_d2_failure_count"
+                    )
+                    self.assertLess(push_in_seq, marker_in_seq)
+                    self.assertLess(marker_in_seq, sig_in_seq)
+                    self.assertLess(push_in_seq, count_in_seq)
+                    push_block = seq[
+                        seq.rfind("- service:", 0, push_in_seq) : marker_in_seq
+                    ]
+                    self.assertNotIn("continue_on_error: true", push_block)
+                    # Phone-sent marker and helpers must not ignore write failures.
+                    helper_chunk = seq[marker_in_seq:]
+                    log_after = helper_chunk.find(
+                        "service: script.emhass_log_event"
+                    )
+                    if log_after != -1:
+                        helper_chunk = helper_chunk[:log_after]
+                    self.assertNotIn("continue_on_error: true", helper_chunk)
+                    self.assertIn("input_boolean.turn_on", seq[push_in_seq:sig_in_seq])
+
+
+class SigenFailureFallbackNotificationTests(unittest.TestCase):
+    def test_stale_plan_logs_detection_and_defers_phone_to_restore(self) -> None:
+        stale = automation_block(
+            "emhass_sigen_disable_on_stale_plan",
+            "emhass_sigen_disable_on_bad_optim",
+        )
+        self.assertIn("service: script.emhass_log_event", stale)
+        self.assertNotIn("service: script.emhass_push_alert", stale)
+        calls = restore_service_calls(stale)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(restore_call_reason(calls[0]), "stale_plan")
+
+    def test_bad_optim_logs_detection_and_defers_phone_to_restore(self) -> None:
+        bad_optim = automation_block(
+            "emhass_sigen_disable_on_bad_optim",
+            "emhass_soc_floor_cutout",
+        )
+        self.assertIn("service: script.emhass_log_event", bad_optim)
+        self.assertNotIn("service: script.emhass_push_alert", bad_optim)
+        calls = restore_service_calls(bad_optim)
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(restore_call_reason(calls[0]), "bad_optim")
 
 
 class SigenNativeRestoreTests(unittest.TestCase):

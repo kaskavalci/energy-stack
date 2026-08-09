@@ -98,3 +98,11 @@ views:
           - entity: sensor.sigenergy2mqtt_modbus_read_errors
           - entity: sensor.sigenergy2mqtt_modbus_write_errors
           - entity: sensor.sigenergy2mqtt_modbus_read_mean
+
+      - type: logbook
+        title: EMHASS events
+        target:
+          entity_id:
+            - input_text.emhass_alert_event
+        hours_to_show: 48
+        name_detail: entity

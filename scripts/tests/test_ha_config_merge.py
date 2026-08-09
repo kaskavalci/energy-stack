@@ -61,6 +61,8 @@ class TestHaConfigMerge(unittest.TestCase):
         self.assertIn("filename: dashboards/sigen_diagnostics.yaml", out)
         self.assertIn("filename: dashboards/emhass_trading.yaml", out)
         self.assertIn("other-dashboard:", out)
+        self.assertIn("title: Other", out)
+        self.assertIn("filename: dashboards/other.yaml", out)
         self.assertIn("input_number.emhass_soc_*", out)
         self.assertIn("sensor.*_noise", out)
 

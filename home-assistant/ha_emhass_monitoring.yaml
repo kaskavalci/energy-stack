@@ -1,8 +1,48 @@
 # Site entities (rendered from config/site.env): ENVOY_PV_ENTITY, SIGEN_PLANT_SLUG, P1_* 
-# HA-side failure alerts → notify.notify (Companion app). Host checks run on energy host (energy-monitor).
-# Requires: Settings → Companion app → Notifications enabled; notify.notify targets your devices.
+# Phone alerts: script.emhass_push_alert → notify.notify (Companion app).
+# Diagnostic detection (A2/A3/A5/D1): script.emhass_log_event → Logbook via input_text.emhass_alert_event.
+# Host checks run on energy host (energy-monitor).
+# Requires: Settings → Companion app → Notifications enabled for push alerts.
 
 script:
+  emhass_log_event:
+    alias: EMHASS log event
+    mode: queued
+    fields:
+      incident_id:
+        selector:
+          text:
+      phase:
+        selector:
+          text:
+      action:
+        default: ''
+        selector:
+          text:
+      message:
+        selector:
+          text:
+    sequence:
+      - variables:
+          alert_event_entity: input_text.emhass_alert_event
+          event_message: >-
+            [{{ incident_id }}] {{ phase }}: {{ message }}
+            {% if action | trim != '' %}
+            Action: {{ action }}
+            {% endif %}
+          anchor_value: >-
+            {{ (incident_id ~ '|' ~ phase ~ '|' ~ message)[:255] }}
+      - service: input_text.set_value
+        target:
+          entity_id: "{{ alert_event_entity }}"
+        data:
+          value: "{{ anchor_value }}"
+      - service: logbook.log
+        data:
+          name: EMHASS alert
+          entity_id: input_text.emhass_alert_event
+          message: "{{ event_message }}"
+
   emhass_push_alert:
     alias: EMHASS push alert
     mode: queued
@@ -138,11 +178,13 @@ automation:
         entity_id: binary_sensor.emhass_fail_optim
         state: "on"
     action:
-      - service: script.emhass_push_alert
+      - service: script.emhass_log_event
         data:
-          title: "EMHASS A2: optim"
+          incident_id: A2
+          phase: detected
           message: >-
-            Action: Check EMHASS logs. optim_status={{ states('sensor.optim_status') }} (expected Optimal).
+            optim_status={{ states('sensor.optim_status') }} (expected Optimal).
+          action: Check EMHASS logs.
 
   - id: emhass_notify_A3_flat_prices
     alias: "EMHASS notify A3: flat prices"
@@ -154,12 +196,14 @@ automation:
         for:
           minutes: 30
     action:
-      - service: script.emhass_push_alert
+      - service: script.emhass_log_event
         data:
-          title: "EMHASS A3: prices"
+          incident_id: A3
+          phase: detected
           message: >-
-            Action: Check Enever configuration. unit_load_cost min/max equal ({{ states('sensor.unit_load_cost') }}).
+            unit_load_cost min/max equal ({{ states('sensor.unit_load_cost') }}).
             Enever CSV may not be loaded.
+          action: Check Enever configuration.
 
   - id: emhass_notify_A5_plan_stale
     alias: "EMHASS notify A5: stale plan"
@@ -171,12 +215,14 @@ automation:
         for:
           minutes: 10
     action:
-      - service: script.emhass_push_alert
+      - service: script.emhass_log_event
         data:
-          title: "EMHASS A5: stale plan"
+          incident_id: A5
+          phase: detected
           message: >-
-            Action: Check emhass-cron on the energy host. Last successful MPC is
-            older than 40 minutes; five-minute publish-data does not refresh it.
+            Last successful MPC is older than 40 minutes; five-minute publish-data
+            does not refresh it.
+          action: Check emhass-cron on the energy host.
 
   - id: emhass_notify_C1_pv
     alias: "EMHASS notify C1: PV sensor"
@@ -185,14 +231,40 @@ automation:
       - platform: state
         entity_id: binary_sensor.emhass_fail_pv_sensor
         to: "on"
+    action:
+      - service: script.emhass_log_event
+        data:
+          incident_id: C1
+          phase: detected
+          message: Enphase PV input is unavailable or stale.
+          action: Check Enphase integration if the fault remains after 30 minutes.
+
+  - id: emhass_escalate_C1_pv
+    alias: "EMHASS escalate C1: PV sensor"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.emhass_fail_pv_sensor
+        to: "on"
         for:
           minutes: 30
+    condition:
+      - condition: state
+        entity_id: binary_sensor.emhass_fail_pv_sensor
+        state: "on"
     action:
       - service: script.emhass_push_alert
         data:
           title: "EMHASS C1: Enphase PV"
           message: >-
             Action: Check Enphase integration. Envoy PV unavailable or stale (>20 min).
+      - service: script.emhass_log_event
+        continue_on_error: true
+        data:
+          incident_id: C1
+          phase: actionable
+          message: Enphase PV input remained impaired for the 30-minute deadline.
+          action: Check Enphase integration.
 
   - id: emhass_notify_C2a_house_load
     alias: "EMHASS notify C2a: house load inputs"
@@ -201,15 +273,58 @@ automation:
       - platform: state
         entity_id: binary_sensor.emhass_fail_house_load
         to: "on"
-        for:
-          minutes: 10
     action:
-      - service: script.emhass_push_alert
+      - service: script.emhass_log_event
         data:
-          title: "EMHASS C2a: house load"
-          message: >-
-            Action: Check mqtt4dsmr or sigenergy2mqtt on .135.
-            P1 net power or Sigen battery power unavailable/stale (>20 min).
+          incident_id: C2a
+          phase: detected
+          message: House-load inputs are unavailable or stale.
+          action: Check mqtt4dsmr or sigenergy2mqtt if the fault remains after 30 minutes.
+
+  - id: emhass_escalate_C2a_house_load
+    alias: "EMHASS escalate C2a: house load inputs"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.emhass_fail_house_load
+        to: "on"
+        for:
+          minutes: 30
+    condition:
+      - condition: state
+        entity_id: binary_sensor.emhass_fail_house_load
+        state: "on"
+    action:
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ is_state('input_boolean.emhass_load_history_root_active', 'on')
+                     or is_state('binary_sensor.emhass_fail_plan_stale', 'on')
+                     or is_state('input_boolean.emhass_d2_actionable_notified', 'on') }}
+            sequence:
+              - service: script.emhass_log_event
+                data:
+                  incident_id: C2a
+                  phase: suppressed_duplicate
+                  message: >-
+                    House-load deadline reached while a higher-priority root
+                    (B6 load-history, plan-stale, or D2 actionable) owns the phone path.
+                  action: Wait for the owning root incident or check mqtt4dsmr/sigenergy2mqtt.
+        default:
+          - service: script.emhass_push_alert
+            data:
+              title: "EMHASS C2a: house load"
+              message: >-
+                Action: Check mqtt4dsmr or sigenergy2mqtt on the energy host.
+                P1 net power or Sigen battery power unavailable/stale (>20 min).
+          - service: script.emhass_log_event
+            continue_on_error: true
+            data:
+              incident_id: C2a
+              phase: actionable
+              message: House-load inputs remained impaired for the 30-minute deadline.
+              action: Check mqtt4dsmr or sigenergy2mqtt on the energy host.
 
   - id: emhass_notify_C2b_soc
     alias: "EMHASS notify C2b: battery SOC"
@@ -218,15 +333,41 @@ automation:
       - platform: state
         entity_id: binary_sensor.emhass_fail_battery_soc
         to: "on"
+    action:
+      - service: script.emhass_log_event
+        data:
+          incident_id: C2b
+          phase: detected
+          message: Battery SOC input is unavailable.
+          action: Check sigenergy2mqtt if the fault remains after 30 minutes.
+
+  - id: emhass_escalate_C2b_soc
+    alias: "EMHASS escalate C2b: battery SOC"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.emhass_fail_battery_soc
+        to: "on"
         for:
-          minutes: 10
+          minutes: 30
+    condition:
+      - condition: state
+        entity_id: binary_sensor.emhass_fail_battery_soc
+        state: "on"
     action:
       - service: script.emhass_push_alert
         data:
           title: "EMHASS C2b: battery SOC"
           message: >-
-            Action: Check sigenergy2mqtt on .135.
+            Action: Check sigenergy2mqtt on the energy host.
             sensor.__SIGEN_PLANT_SLUG___plant_battery_soc unavailable.
+      - service: script.emhass_log_event
+        continue_on_error: true
+        data:
+          incident_id: C2b
+          phase: actionable
+          message: Battery SOC input remained impaired for the 30-minute deadline.
+          action: Check sigenergy2mqtt on the energy host.
 
   - id: emhass_notify_E1_p1
     alias: "EMHASS notify E1: P1"
@@ -235,13 +376,58 @@ automation:
       - platform: state
         entity_id: binary_sensor.emhass_fail_p1_sensors
         to: "on"
-        for:
-          minutes: 15
     action:
-      - service: script.emhass_push_alert
+      - service: script.emhass_log_event
         data:
-          title: "EMHASS E1: P1 meter"
-          message: "Action: Check mqtt4dsmr. P1 power consumption or net power unavailable."
+          incident_id: E1
+          phase: detected
+          message: P1 meter inputs are unavailable.
+          action: Check mqtt4dsmr if the fault remains after 30 minutes.
+
+  - id: emhass_escalate_E1_p1
+    alias: "EMHASS escalate E1: P1"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.emhass_fail_p1_sensors
+        to: "on"
+        for:
+          minutes: 30
+    condition:
+      - condition: state
+        entity_id: binary_sensor.emhass_fail_p1_sensors
+        state: "on"
+    action:
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ is_state('input_boolean.emhass_load_history_root_active', 'on')
+                     or is_state('binary_sensor.emhass_fail_plan_stale', 'on')
+                     or is_state('input_boolean.emhass_d2_actionable_notified', 'on') }}
+            sequence:
+              - service: script.emhass_log_event
+                data:
+                  incident_id: E1
+                  phase: suppressed_duplicate
+                  message: >-
+                    P1 deadline reached while a higher-priority root
+                    (B6 load-history, plan-stale, or D2 actionable) owns the phone path.
+                  action: Wait for the owning root incident or check mqtt4dsmr.
+        default:
+          - service: script.emhass_push_alert
+            data:
+              title: "EMHASS E1: P1 meter"
+              message: >-
+                Action: Check mqtt4dsmr on the energy host.
+                P1 power consumption or net power unavailable.
+          - service: script.emhass_log_event
+            continue_on_error: true
+            data:
+              incident_id: E1
+              phase: actionable
+              message: P1 meter inputs remained impaired for the 30-minute deadline.
+              action: Check mqtt4dsmr on the energy host.
 
   - id: emhass_notify_E2_sigen_mqtt
     alias: "EMHASS notify E2: sigenergy2mqtt"
@@ -250,13 +436,91 @@ automation:
       - platform: state
         entity_id: binary_sensor.emhass_fail_sigen_mqtt
         to: "on"
+    action:
+      - service: script.emhass_log_event
+        data:
+          incident_id: E2
+          phase: detected
+          message: Sigen Remote EMS MQTT input is unavailable.
+          action: Check sigenergy2mqtt if the fault remains after 30 minutes.
+
+  - id: emhass_escalate_E2_sigen_mqtt
+    alias: "EMHASS escalate E2: sigenergy2mqtt"
+    mode: single
+    trigger:
+      - platform: state
+        entity_id: binary_sensor.emhass_fail_sigen_mqtt
+        to: "on"
         for:
-          minutes: 15
+          minutes: 30
+    condition:
+      - condition: state
+        entity_id: binary_sensor.emhass_fail_sigen_mqtt
+        state: "on"
     action:
       - service: script.emhass_push_alert
         data:
           title: "EMHASS E2: Sigen MQTT"
-          message: "Action: Check sigenergy2mqtt on .135. Remote EMS select unavailable."
+          message: >-
+            Action: Check sigenergy2mqtt on the energy host.
+            Remote EMS select unavailable.
+      - service: script.emhass_log_event
+        continue_on_error: true
+        data:
+          incident_id: E2
+          phase: actionable
+          message: Sigen MQTT remained impaired for the 30-minute deadline.
+          action: Check sigenergy2mqtt on the energy host.
+
+  - id: emhass_log_CE_sensor_recovery
+    alias: "EMHASS log C/E sensor recovery"
+    mode: queued
+    trigger:
+      - id: C1
+        platform: state
+        entity_id: binary_sensor.emhass_fail_pv_sensor
+        from: "on"
+        to: "off"
+      - id: C2a
+        platform: state
+        entity_id: binary_sensor.emhass_fail_house_load
+        from: "on"
+        to: "off"
+      - id: C2b
+        platform: state
+        entity_id: binary_sensor.emhass_fail_battery_soc
+        from: "on"
+        to: "off"
+      - id: E1
+        platform: state
+        entity_id: binary_sensor.emhass_fail_p1_sensors
+        from: "on"
+        to: "off"
+      - id: E2
+        platform: state
+        entity_id: binary_sensor.emhass_fail_sigen_mqtt
+        from: "on"
+        to: "off"
+    action:
+      - variables:
+          duration_minutes: >-
+            {{ ((as_timestamp(now()) - as_timestamp(trigger.from_state.last_changed))
+                / 60) | round(1) }}
+          restored_function: >-
+            {{ {
+              'C1': 'Enphase PV input',
+              'C2a': 'house-load inputs',
+              'C2b': 'battery SOC input',
+              'E1': 'P1 meter inputs',
+              'E2': 'Sigen MQTT input'
+            }[trigger.id] }}
+      - service: script.emhass_log_event
+        data:
+          incident_id: "{{ trigger.id }}"
+          phase: resolved
+          message: >-
+            {{ restored_function }} restored after {{ duration_minutes }} minutes.
+          action: ''
 
   - id: emhass_notify_D1_control_blocked
     alias: "EMHASS notify D1: control blocked"
@@ -268,16 +532,19 @@ automation:
         for:
           minutes: 5
     action:
-      - service: script.emhass_push_alert
+      - service: script.emhass_log_event
         data:
-          title: "EMHASS D1: gates"
+          incident_id: D1
+          phase: detected
           message: >-
-            Action: {{ state_attr('binary_sensor.emhass_control_allowed', 'block_action') }}
-            Master ON but control not allowed (reason: {{ state_attr('binary_sensor.emhass_control_allowed', 'block_reason') }}).
+            Master ON but control not allowed (reason:
+            {{ state_attr('binary_sensor.emhass_control_allowed', 'block_reason') }}).
+          action: >-
+            {{ state_attr('binary_sensor.emhass_control_allowed', 'block_action') }}
 
   - id: emhass_notify_D3_recovery_stalled
     alias: "EMHASS notify D3: recovery stalled"
-    mode: single
+    mode: queued
     trigger:
       - id: active_recovery
         platform: state
@@ -295,15 +562,213 @@ automation:
       - condition: state
         entity_id: input_boolean.emhass_auto_control_master
         state: "on"
+      - condition: template
+        value_template: >-
+          {{ (trigger.id == 'active_recovery'
+              and is_state('input_boolean.emhass_recovery_active', 'on'))
+             or (trigger.id == 'waiting_below_floor'
+                 and states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(100)
+                     < states('input_number.emhass_soc_min') | float(0)) }}
     action:
-      - service: script.emhass_push_alert
+      - variables:
+          incident_id: D3
+          deadline: >-
+            {{ '2-hour active-recovery' if trigger.id == 'active_recovery'
+               else '6-hour below-floor' }}
+          action_message: >-
+            {% if trigger.id == 'active_recovery' %}
+              Check Sigenergy mode, limits, and SOC.
+            {% else %}
+              Check MPC plans and prices.
+            {% endif %}
+          incident_message: >-
+            {% if trigger.id == 'active_recovery' %}
+              Authorized recovery remained active for the 2-hour deadline.
+            {% else %}
+              SOC remained below floor for the 6-hour deadline without a qualifying
+              fresh EMHASS charge command.
+            {% endif %}
+      - choose:
+          - conditions:
+              - condition: state
+                entity_id: input_boolean.emhass_d3_actionable_notified
+                state: "off"
+            sequence:
+              - service: script.emhass_push_alert
+                data:
+                  title: "EMHASS D3: recovery stalled"
+                  message: "Action: {{ action_message }} {{ incident_message }}"
+              - service: input_boolean.turn_on
+                target:
+                  entity_id: input_boolean.emhass_d3_actionable_notified
+              - service: script.emhass_log_event
+                data:
+                  incident_id: D3
+                  phase: actionable
+                  message: "{{ incident_message }}"
+                  action: "{{ action_message }}"
+        default:
+          - service: script.emhass_log_event
+            data:
+              incident_id: D3
+              phase: suppressed_duplicate
+              message: >-
+                Duplicate {{ deadline }} recovery-stall escalation suppressed.
+              action: "{{ action_message }}"
+
+  - id: emhass_log_D3_detected
+    alias: "EMHASS log D3 recovery risk"
+    mode: queued
+    trigger:
+      - id: active_recovery
+        platform: state
+        entity_id: input_boolean.emhass_recovery_active
+        to: "on"
+      - id: waiting_below_floor
+        platform: numeric_state
+        entity_id: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
+        below: input_number.emhass_soc_min
+    condition:
+      - condition: state
+        entity_id: input_boolean.emhass_auto_control_master
+        state: "on"
+    action:
+      - service: script.emhass_log_event
         data:
-          title: "EMHASS D3: recovery stalled"
+          incident_id: D3
+          phase: detected
           message: >-
             {% if trigger.id == 'active_recovery' %}
-              Action: Check Sigenergy mode, limits, and SOC. An authorized recovery
-              charge has been active for more than two hours without reaching target.
+              Authorized battery recovery started; escalation deadline is 2 hours.
             {% else %}
-              Action: Check MPC plans and prices. SOC has remained below floor for six
-              hours without a qualifying fresh EMHASS charge command.
+              Battery SOC fell below its floor; escalation deadline is 6 hours.
             {% endif %}
+          action: ''
+      - if:
+          - condition: template
+            value_template: "{{ trigger.id == 'waiting_below_floor' }}"
+        then:
+          - service: input_datetime.set_datetime
+            target:
+              entity_id: input_datetime.emhass_d3_below_floor_detected
+            data:
+              datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+
+  - id: emhass_log_D3_recovery
+    alias: "EMHASS log D3 recovery"
+    mode: queued
+    trigger:
+      - id: active_recovery
+        platform: state
+        entity_id: input_boolean.emhass_recovery_active
+        from: "on"
+        to: "off"
+      - id: waiting_below_floor
+        platform: numeric_state
+        entity_id: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
+        above: input_number.emhass_soc_min
+    action:
+      - variables:
+          soc_above_floor: >-
+            {{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(0)
+               >= states('input_number.emhass_soc_min') | float(0) }}
+          recovery_inactive: >-
+            {{ is_state('input_boolean.emhass_recovery_active', 'off') }}
+          both_clear: "{{ recovery_inactive and soc_above_floor }}"
+          duration_minutes: >-
+            {% if trigger.id == 'waiting_below_floor' %}
+              {% set start_ts = state_attr(
+                   'input_datetime.emhass_d3_below_floor_detected', 'timestamp'
+                 ) | float(0) %}
+              {{ ((as_timestamp(now()) - start_ts) / 60) | round(1)
+                 if start_ts > 0
+                 else ((as_timestamp(now())
+                        - as_timestamp(trigger.from_state.last_changed))
+                       / 60) | round(1) }}
+            {% else %}
+              {{ ((as_timestamp(now()) - as_timestamp(trigger.from_state.last_changed))
+                  / 60) | round(1) }}
+            {% endif %}
+          cause_label: >-
+            {{ 'authorized battery recovery'
+               if trigger.id == 'active_recovery'
+               else 'battery SOC floor' }}
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ both_clear }}"
+            sequence:
+              - service: script.emhass_log_event
+                data:
+                  incident_id: D3
+                  phase: resolved
+                  message: >-
+                    {{ cause_label }} restored after {{ duration_minutes }} minutes;
+                    active recovery inactive and SOC at or above floor.
+                  action: ''
+              - service: input_boolean.turn_off
+                target:
+                  entity_id: input_boolean.emhass_d3_actionable_notified
+        default:
+          - service: script.emhass_log_event
+            data:
+              incident_id: D3
+              phase: recovering
+              message: >-
+                {% if trigger.id == 'active_recovery' %}
+                  Authorized battery recovery ended after {{ duration_minutes }} minutes;
+                  SOC remains below floor so D3 is not fully resolved.
+                {% else %}
+                  Battery SOC returned above floor after {{ duration_minutes }} minutes;
+                  authorized recovery is still active so D3 is not fully resolved.
+                {% endif %}
+              action: ''
+
+  - id: emhass_clear_D3_notified_on_ha_start
+    alias: "EMHASS clear D3 notified on HA start"
+    mode: single
+    trigger:
+      - platform: homeassistant
+        event: start
+    condition:
+      - condition: state
+        entity_id: input_boolean.emhass_d3_actionable_notified
+        state: "on"
+      - condition: state
+        entity_id: input_boolean.emhass_recovery_active
+        state: "off"
+      - condition: template
+        value_template: >-
+          {{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(0)
+             >= states('input_number.emhass_soc_min') | float(0) }}
+    action:
+      - service: input_boolean.turn_off
+        target:
+          entity_id: input_boolean.emhass_d3_actionable_notified
+      - service: script.emhass_log_event
+        data:
+          incident_id: D3
+          phase: resolved
+          message: >-
+            Cleared stale D3 actionable flag after HA start; recovery inactive and
+            SOC at or above floor.
+          action: ''
+
+input_text:
+  emhass_alert_event:
+    name: EMHASS alert event
+    max: 255
+    initial: ''
+
+input_datetime:
+  emhass_d3_below_floor_detected:
+    name: EMHASS D3 below-floor detected
+    has_date: true
+    has_time: true
+
+input_boolean:
+  emhass_d3_actionable_notified:
+    name: EMHASS D3 actionable notified
+  emhass_load_history_root_active:
+    name: EMHASS load-history root active
+    icon: mdi:chart-timeline-variant

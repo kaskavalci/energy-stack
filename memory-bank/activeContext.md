@@ -1,7 +1,20 @@
 # Active Context
 
-**Last updated:** 2026-08-05
-**Author:** Auto
+**Last updated:** 2026-08-09
+**Author:** Composer
+
+## EMHASS actionable alert escalation — committed, not deployed (2026-08-09)
+
+Branch `feature/emhass-actionable-alert-escalation`: phone only after
+operator-action deadlines; detection/intentional/recovery stay Logbook-only.
+
+- HA: `script.emhass_log_event` + `input_text.emhass_alert_event`; C/E 30 min;
+  D3 2h/6h; D2 reason/phase with `emhass_d2_actionable_notified` phone marker;
+  C2a/E1 ownership suppress vs B6/plan-stale/D2 actionable.
+- Monitor: B2–B6 detect → log, phone after 60 min; B6 ownership helper with
+  pending retry; hard A4/A6/B1 stay immediate.
+- Dashboard: native EMHASS events Logbook card (48h) on Sigen diagnostics.
+- Spec/plan under `docs/superpowers/`; deploy still needs operator approval.
 
 ## Sigen diagnostics dashboard — DEPLOYED (2026-08-05 ~22:47 CEST); stale/unavailable check pending operator approval
 

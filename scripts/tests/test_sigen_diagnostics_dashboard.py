@@ -56,6 +56,15 @@ BRIDGE_HISTORY_ENTITIES = [
     "sensor.sigenergy2mqtt_modbus_write_errors",
     "sensor.sigenergy2mqtt_modbus_read_mean",
 ]
+PRESERVED_CARD_TITLES = [
+    "Battery health",
+    "Status and alarms",
+    "Bridge liveness",
+    "Bridge metrics",
+    "Battery and PCS temperatures — last 7 days",
+    "Bridge Modbus errors and read mean — last 7 days",
+]
+EMHASS_EVENT_ENTITY = "input_text.emhass_alert_event"
 
 
 def load_yaml(path: Path) -> Mapping[str, Any]:
@@ -287,6 +296,35 @@ class SigenDiagnosticsDashboardTests(unittest.TestCase):
                 "last-updated",
                 msg=eid,
             )
+
+    def test_preserved_health_and_liveness_cards_remain(self) -> None:
+        titles = {
+            n.get("title")
+            for n in iter_mappings(self.dashboard)
+            if isinstance(n.get("title"), str)
+        }
+        for title in PRESERVED_CARD_TITLES:
+            self.assertIn(title, titles, msg=f"preserved card missing: {title}")
+
+    def test_emhass_events_logbook_card(self) -> None:
+        cards = [
+            n
+            for n in iter_mappings(self.dashboard)
+            if n.get("type") == "logbook"
+        ]
+        self.assertEqual(len(cards), 1, msg="expected one EMHASS events logbook card")
+        card = cards[0]
+        self.assertEqual(card.get("title"), "EMHASS events")
+        self.assertEqual(card.get("hours_to_show"), 48)
+        self.assertEqual(card.get("name_detail"), "entity")
+        target = card.get("target")
+        self.assertIsInstance(target, Mapping)
+        self.assertEqual(target.get("entity_id"), [EMHASS_EVENT_ENTITY])
+        views = self.dashboard.get("views", [])
+        self.assertEqual(len(views), 1)
+        view_cards = views[0].get("cards", [])
+        self.assertIsInstance(view_cards, list)
+        self.assertEqual(view_cards[-1], card)
 
 
 if __name__ == "__main__":
