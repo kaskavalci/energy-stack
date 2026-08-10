@@ -5,6 +5,7 @@ __pycache__/
 .live-from-hosts/
 
 config/site.env
+config/wud.env
 .rendered/
 
 emhass/secrets_emhass.yaml

@@ -4,6 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 cp -n "${ROOT}/config/site.env.example" "${ROOT}/config/site.env" 2>/dev/null || true
+cp -n "${ROOT}/config/wud.env.example" "${ROOT}/config/wud.env" 2>/dev/null || true
 cp -n "${ROOT}/emhass/secrets_emhass.yaml.example" "${ROOT}/emhass/secrets_emhass.yaml" 2>/dev/null || true
 cp -n "${ROOT}/emhass/share/config.json.example" "${ROOT}/emhass/share/config.json" 2>/dev/null || true
 

@@ -95,7 +95,10 @@ class SiteLocationWiringTests(unittest.TestCase):
         self.assertLess(validator, rsync)
 
     def test_deploy_force_recreates_emhass(self) -> None:
-        self.assertIn("docker compose up -d --force-recreate emhass", self.deploy)
+        self.assertIn(
+            "docker compose --env-file config/wud.env up -d --force-recreate emhass",
+            self.deploy,
+        )
 
     def test_deploy_excludes_local_artifacts_and_keeps_runtime_files(self) -> None:
         real_rsync = shutil.which("rsync")
@@ -118,7 +121,11 @@ class SiteLocationWiringTests(unittest.TestCase):
                 REPO_ROOT / "scripts" / "deploy-energy-stack.sh",
                 fixture_root / "scripts" / "deploy-energy-stack.sh",
             )
-            for name in ("source-site-env.sh", "validate_site_location.py"):
+            for name in (
+                "source-site-env.sh",
+                "validate_site_location.py",
+                "validate_wud_env.py",
+            ):
                 shutil.copy2(
                     REPO_ROOT / "scripts" / "lib" / name,
                     fixture_root / "scripts" / "lib" / name,
@@ -132,6 +139,12 @@ class SiteLocationWiringTests(unittest.TestCase):
                 "TZ=Europe/Amsterdam\n"
                 "ENERGY_REMOTE_HOST=test-host\n"
                 "ENERGY_REMOTE_DIR=/srv/energy-stack\n",
+                encoding="utf-8",
+            )
+            (fixture_root / "config" / "wud.env").write_text(
+                "WUD_TELEGRAM_BOT_TOKEN=synthetic-token\n"
+                "WUD_TELEGRAM_CHAT_ID=synthetic-chat\n"
+                "TZ=Europe/Amsterdam\n",
                 encoding="utf-8",
             )
 

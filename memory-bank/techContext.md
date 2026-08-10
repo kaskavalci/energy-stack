@@ -16,8 +16,11 @@
 | `emhass-cron` | `fetch_prices_emhass.py` |
 | `energy-monitor` | `health_notify.py` every 10 min |
 | `mosquitto`, `mqtt4dsmr`, `sigenergy2mqtt` | MQTT bridges (`emhass` + `sigenergy2mqtt` use floating `:latest` by operator choice; MQTT broker via env for early persistence) |
+| `wud` | Image update notifications only; one instance on each host, persistent `/store` volume |
 
 HA itself runs on the **HA host** via [`home-assistant/docker-compose.yml`](../home-assistant/docker-compose.yml) (`ghcr.io/home-assistant/home-assistant:stable`, `network_mode: host`), not on the energy host.
+
+WUD uses `docker.io/getwud/wud:8.3.0@sha256:1cf5ecfdbd2389847427fd9685c4fd337ee8c74a0f584c52288d760d9a58811e` on both hosts. The energy-host UI uses port **3000**; the HA-host UI uses port **3001**. It is unauthenticated. Host firewall rules must enforce LAN-only access. Compose port mappings bind all interfaces by default, so operators must configure host firewall rules and verify that an untrusted network is denied. This repository does not configure firewall rules. WUD excludes local `emhass-cron` and `energy-monitor` builds. It sends Telegram notifications only and must not update containers automatically.
 
 ## EMHASS invariants
 
@@ -37,6 +40,9 @@ HA itself runs on the **HA host** via [`home-assistant/docker-compose.yml`](../h
   verified; record evidence under `docs/verification/emhass/` when re-pinning.
 - Weather retry → `clear_weather_cache_files()` before `weather-forecast-cache`
 - Shared stale logic: `lib/weather_cache_stale.py`
+- WUD secrets are only in gitignored `config/wud.env`. Never print or commit
+  the file or its values. Run WUD Compose with `--env-file config/wud.env` on
+  the energy host and the selected WUD env-file path on the HA host.
 - EMHASS site location comes from validated `LAT`, `LON`, `ALT`, and
   `TIME_ZONE` in gitignored `config/site.env`; never rely on image defaults.
 - `TZ` and `TIME_ZONE` must match.
@@ -79,13 +85,16 @@ HA itself runs on the **HA host** via [`home-assistant/docker-compose.yml`](../h
   - Check: `docker exec ${HA_CONTAINER_NAME} hass --script check_config`
   - Restart: `docker compose -f … restart` (deploy user in `docker` group; no sudo)
 - HA merge requires `ruamel.yaml` (`scripts/lib/requirements.txt`)
+- **HA WUD only:** `./scripts/deploy-home-assistant.sh --wud-only` backs up the
+  HA Compose file, updates WUD, and does not restart HA. To roll back, restore
+  that Compose backup and run Compose with the same `--env-file` option.
 
 Hosts and paths from `config/site.env` — see [docs/SETUP.md](../docs/SETUP.md).
 Migration: [docs/ha-odroid-container-migration.md](../docs/ha-odroid-container-migration.md).
 
 ## Secrets
 
-Never commit `config/site.env`, `emhass/secrets_emhass.yaml`, `emhass/share/config.json`, live CSV snapshots.
+Never commit `config/site.env`, `config/wud.env`, `emhass/secrets_emhass.yaml`, `emhass/share/config.json`, live CSV snapshots.
 
 HA packages are rendered from `config/site.env` at deploy (`scripts/render-ha-packages.sh`).
 

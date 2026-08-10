@@ -45,6 +45,14 @@ Configured in `config/site.env` (copy from `config/site.env.example`):
 | `HA_CONTAINER_NAME` | HA container name (default `homeassistant`) |
 | `SIGENERGY_MODBUS_HOST` | Sigenergy inverter (Modbus) |
 
+WUD runs on `ENERGY_REMOTE_HOST` (UI port **3000**) and `HA_SSH_HOST` (UI port
+**3001**). It has no UI authentication and sends notifications only; it must not
+update containers automatically. Each service keeps data in a persistent
+`/store` volume. WUD excludes local `emhass-cron` and `energy-monitor` builds.
+Docker Compose port mappings bind all interfaces by default. Operators must use
+host firewall rules to allow trusted LAN access only and verify that an
+untrusted network is denied. Do not configure firewall rules automatically.
+
 ## Deploy and verify
 
 ```bash
@@ -59,6 +67,10 @@ ssh "${ENERGY_REMOTE_HOST}" 'docker ps --filter name=emhass'
 
 HA deploy uses **additive merge** (`scripts/lib/ha_config_merge.py`) — only upserts energy-stack package keys. Renders `home-assistant/*.yaml` from `config/site.env` before upload. Config check is `docker exec` (not `ha core check`); restart is `docker compose` (not `ha core restart`). Deploy user must own `${HA_CONFIG_DIR}` and be in the `docker` group (no interactive sudo).
 
+For WUD only, run `./scripts/deploy-home-assistant.sh --wud-only`. It backs up
+the HA Compose file and deploys WUD without an HA restart. Roll back by restoring
+that Compose backup, then run Compose with its WUD `--env-file` option.
+
 ## EMHASS invariants (do not break)
 
 - `optimization_time_step`: **30** min; `prediction_horizon`: **32** max
@@ -67,6 +79,11 @@ HA deploy uses **additive merge** (`scripts/lib/ha_config_merge.py`) — only up
 - Price fetch failure → **abort MPC** (no stale-CSV fallback)
 - Weather retry → `clear_weather_cache_files()` before EMHASS `weather-forecast-cache`
 - Shared stale logic: `lib/weather_cache_stale.py` (cron + monitor)
+- WUD image: `docker.io/getwud/wud:8.3.0@sha256:1cf5ecfdbd2389847427fd9685c4fd337ee8c74a0f584c52288d760d9a58811e`
+- WUD secrets stay only in gitignored `config/wud.env`; never print or commit them.
+- Run WUD Compose commands with `--env-file config/wud.env` on the energy host
+  and the selected HA WUD env-file path on the HA host.
+- WUD sends notifications only. Do not add automatic-update triggers.
 
 ### EMHASS upgrades
 
@@ -91,5 +108,5 @@ Operator scratch notes (gitignored): `memory-bank/notebook/`
 ## Coding conventions
 
 - Minimal, focused diffs; match existing YAML/Python style
-- Never commit secrets: `config/site.env`, `secrets_emhass.yaml`, `emhass/share/config.json`, live CSV snapshots
+- Never commit secrets: `config/site.env`, `config/wud.env`, `secrets_emhass.yaml`, `emhass/share/config.json`, live CSV snapshots
 - Only create git commits when explicitly requested

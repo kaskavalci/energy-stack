@@ -64,6 +64,8 @@ services:
       dockerfile: emhass-cron/Dockerfile
     container_name: emhass-cron
     restart: unless-stopped
+    labels:
+      wud.watch: "false"
     env_file:
       - config/site.env
     volumes:
@@ -85,6 +87,8 @@ services:
       dockerfile: monitor/Dockerfile
     container_name: energy-monitor
     restart: unless-stopped
+    labels:
+      wud.watch: "false"
     env_file:
       - config/site.env
     volumes:
@@ -102,3 +106,28 @@ services:
     depends_on:
       emhass:
         condition: service_healthy
+
+  wud:
+    image: docker.io/getwud/wud:8.3.0@sha256:1cf5ecfdbd2389847427fd9685c4fd337ee8c74a0f584c52288d760d9a58811e
+    container_name: wud
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - wud-energy-store:/store
+    environment:
+      TZ: "${TZ:?config/wud.env must define TZ}"
+      WUD_WATCHER_LOCAL_SOCKET: /var/run/docker.sock
+      WUD_WATCHER_LOCAL_CRON: "0 6 * * *"
+      WUD_WATCHER_LOCAL_WATCHALL: "true"
+      WUD_TRIGGER_TELEGRAM_ENERGY_BOTTOKEN: "${WUD_TELEGRAM_BOT_TOKEN:?config/wud.env must define WUD_TELEGRAM_BOT_TOKEN}"
+      WUD_TRIGGER_TELEGRAM_ENERGY_CHATID: "${WUD_TELEGRAM_CHAT_ID:?config/wud.env must define WUD_TELEGRAM_CHAT_ID}"
+      WUD_TRIGGER_TELEGRAM_ENERGY_MESSAGEFORMAT: HTML
+      WUD_TRIGGER_TELEGRAM_ENERGY_MODE: batch
+      WUD_TRIGGER_TELEGRAM_ENERGY_THRESHOLD: all
+      WUD_TRIGGER_TELEGRAM_ENERGY_ONCE: "true"
+      WUD_TRIGGER_TELEGRAM_ENERGY_BATCHTITLE: "energy-host: $${count} update(s)"
+
+volumes:
+  wud-energy-store:

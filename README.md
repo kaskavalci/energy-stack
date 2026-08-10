@@ -39,8 +39,8 @@ Sigenergy (Modbus/MQTT) ← optional Remote EMS ←─────────�
 
 | Component                              | Role                                                                                      |
 | -------------------------------------- | ----------------------------------------------------------------------------------------- |
-| **Energy host** (`ENERGY_REMOTE_HOST`) | Docker: EMHASS, price/MPC cron, health monitor, Mosquitto, P1 MQTT bridge, sigenergy2mqtt |
-| **Home Assistant** (`HA_SSH_HOST`)     | Zonneplan HACS, EMHASS REST sensors, trading dashboard, EMS scripts, entity-level alerts  |
+| **Energy host** (`ENERGY_REMOTE_HOST`) | Docker: EMHASS, price/MPC cron, health monitor, Mosquitto, P1 MQTT bridge, sigenergy2mqtt, WUD UI on port 3000 |
+| **Home Assistant** (`HA_SSH_HOST`)     | Zonneplan HACS, EMHASS REST sensors, trading dashboard, EMS scripts, entity-level alerts, WUD UI on port 3001 |
 
 Site-specific hosts, entity IDs, and Modbus targets live in gitignored `config/site.env`. HA package YAML is rendered from those values at deploy time.
 
@@ -83,6 +83,25 @@ HA config merge requires `ruamel.yaml`:
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r scripts/lib/requirements.txt
 ```
+
+## WUD image notifications
+
+What's Up Docker (WUD) checks images on both hosts. It sends Telegram update
+notifications only. It does not update containers automatically. WUD keeps its
+state in the persistent `/store` volume on each host.
+
+Copy `config/wud.env.example` to the gitignored `config/wud.env`, then set the
+Telegram values. Never commit `config/wud.env` or its secret values.
+
+The WUD UI has no authentication. Use the LAN address configured by
+`ENERGY_REMOTE_HOST` with port **3000**, and the LAN address configured by
+`HA_SSH_HOST` with port **3001**. Docker Compose port mappings bind all
+interfaces by default. Configure host firewall rules to allow trusted LAN access
+only, and verify that an untrusted network cannot access either UI. This
+repository does not configure firewall rules automatically.
+
+WUD does not watch the local `emhass-cron` or `energy-monitor` images because
+they are local builds.
 
 ## Documentation
 

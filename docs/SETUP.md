@@ -22,10 +22,15 @@ Creates gitignored files from examples:
 | File | Purpose |
 |------|---------|
 | `config/site.env` | Hosts, SSH, entity IDs, Modbus, Open-Meteo location |
+| `config/wud.env` | WUD Telegram notification secrets |
 | `emhass/secrets_emhass.yaml` | HA URL + long-lived token |
 | `emhass/share/config.json` | EMHASS plant parameters |
 | `sigenergy/sigenergy2mqtt.yaml` | Modbus target |
 | `mosquitto/config/mosquitto.conf` | Local MQTT broker |
+
+Copy `config/wud.env.example` to `config/wud.env` and set its Telegram values.
+`setup-local.sh` does this copy if the file does not exist. Never commit
+`config/wud.env` or its values.
 
 Edit `config/site.env` and `emhass/secrets_emhass.yaml`, then re-render:
 
@@ -88,7 +93,7 @@ Find your Envoy entity under **Settings → Devices → Enphase Envoy**. Sigener
 ## Deploy order
 
 ```bash
-# 1. Energy host (.135 or ENERGY_REMOTE_HOST)
+# 1. Energy host (ENERGY_REMOTE_HOST)
 ./scripts/deploy-energy-stack.sh
 
 # 2. Home Assistant (renders packages + preflights secrets)
@@ -103,8 +108,63 @@ Requires `config/site.env` (run `setup-local.sh` first). `emhass`, `emhass-cron`
 and `energy-monitor` load site variables from `config/site.env` via `env_file`.
 
 ```bash
-docker compose up -d
+docker compose --env-file config/wud.env up -d
 ```
+
+## WUD image notifications
+
+WUD runs on both hosts with image
+`docker.io/getwud/wud:8.3.0@sha256:1cf5ecfdbd2389847427fd9685c4fd337ee8c74a0f584c52288d760d9a58811e`.
+It checks for image updates and sends Telegram notifications. It does not update
+containers automatically. Each host keeps WUD data in its persistent `/store`
+volume. WUD excludes the local `emhass-cron` and `energy-monitor` builds.
+
+For the energy host, run Compose with the WUD secret file:
+
+```bash
+docker compose --env-file config/wud.env up -d wud
+```
+
+The normal energy deploy does this after it validates and securely copies
+`config/wud.env`. For Home Assistant, `deploy-home-assistant.sh` copies the file
+to the selected Compose directory and always uses Docker Compose with its
+`--env-file` option.
+
+The unauthenticated WUD UI is available on the LAN address configured by
+`ENERGY_REMOTE_HOST` at port **3000** and on the LAN address configured by
+`HA_SSH_HOST` at port **3001**. Docker Compose port mappings bind all interfaces
+by default. Configure host firewall rules to allow trusted LAN access only. Do
+not expose these UIs to untrusted networks. Verify that access from an
+untrusted network is denied. This repository does not configure firewall rules
+automatically.
+
+To deploy only WUD on the HA host, without an HA restart:
+
+```bash
+./scripts/deploy-home-assistant.sh --wud-only
+```
+
+This command makes a backup of the HA Compose file in
+`${HA_CONFIG_DIR}/backups/` before it replaces the file. To roll back, use this
+order on the HA host:
+
+1. Set `HA_COMPOSE_PATH` to the selected Compose file. Set `HA_WUD_ENV_PATH` to
+   `wud.env` in the same directory.
+2. Stop WUD with the selected Compose project before you restore the backup:
+
+   ```bash
+   docker compose -f "${HA_COMPOSE_PATH}" --env-file "${HA_WUD_ENV_PATH}" stop wud
+   ```
+
+3. Copy the selected backup to `${HA_COMPOSE_PATH}`.
+4. Check the restored Compose file with the same environment file:
+
+   ```bash
+   docker compose -f "${HA_COMPOSE_PATH}" --env-file "${HA_WUD_ENV_PATH}" config --quiet
+   ```
+
+Do not restart Home Assistant unless the rollback requires it and the operator
+approves it. Keep the WUD store volume for a later retry.
 
 ## Sigenergy native fallback
 
@@ -137,4 +197,4 @@ Entity IDs: [ENTITY_CONTRACT.md](ENTITY_CONTRACT.md) § Sigen diagnostics.
 ## Security notes
 
 - Do not expose EMHASS port **5000** or Mosquitto **1883** to the internet without authentication.
-- Never commit `secrets_emhass.yaml`, `config/site.env`, or live `config.json`.
+- Never commit `secrets_emhass.yaml`, `config/site.env`, `config/wud.env`, or live `config.json`.
