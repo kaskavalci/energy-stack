@@ -262,8 +262,9 @@ class NativePvPanelTests(unittest.TestCase):
             [
                 "sensor.unit_load_cost",
                 "sensor.unit_prod_price",
-                "sensor.emhass_price_rank_now",
+                "sensor.zonneplan_current_tariff_group",
                 "sensor.emhass_net_electricity_profit_today",
+                "sensor.emhass_planned_profit_today",
                 "sensor.emhass_net_electricity_profit_month",
             ],
         )
@@ -272,7 +273,12 @@ class NativePvPanelTests(unittest.TestCase):
             for row in entities
             if isinstance(row, Mapping) and "name" in row
         }
+        self.assertEqual(named["sensor.zonneplan_current_tariff_group"], "Tariff group")
         self.assertEqual(named["sensor.emhass_net_electricity_profit_today"], "Net profit today")
+        self.assertEqual(
+            named["sensor.emhass_planned_profit_today"],
+            "Planned today (covered slots)",
+        )
         self.assertEqual(
             named["sensor.emhass_net_electricity_profit_month"], "Net profit this month"
         )
@@ -334,7 +340,7 @@ class NativePvPanelTests(unittest.TestCase):
         entity_ids = [row.get("entity") for row in series]
         self.assertNotIn("sensor.emhass_battery_power_emhass_sign_w", entity_ids)
 
-    def test_net_profit_7d_statistics_graph(self) -> None:
+    def test_planned_vs_realized_profit_7d_statistics_graph(self) -> None:
         cards = self.trading_view().get("cards", [])
         prices_idx = next(
             i
@@ -345,7 +351,7 @@ class NativePvPanelTests(unittest.TestCase):
         self.assertIsInstance(graph, Mapping)
         self.assertEqual(graph.get("type"), "statistics-graph")
         self.assertEqual(
-            graph.get("title"), "Net electricity profit — last 7 days"
+            graph.get("title"), "Planned vs realized profit — last 7 days"
         )
         self.assertEqual(graph.get("days_to_show"), 7)
         self.assertEqual(graph.get("period"), "day")
@@ -353,12 +359,20 @@ class NativePvPanelTests(unittest.TestCase):
         self.assertEqual(graph.get("stat_types"), ["state"])
         entities = graph.get("entities")
         self.assertIsInstance(entities, list)
-        self.assertEqual(len(entities), 1)
+        self.assertEqual(len(entities), 2)
         self.assertEqual(
             entities[0].get("entity"),
+            "sensor.emhass_planned_profit_today",
+        )
+        self.assertEqual(
+            entities[0].get("name"),
+            "Planned (covered slots, EUR)",
+        )
+        self.assertEqual(
+            entities[1].get("entity"),
             "sensor.emhass_net_electricity_profit_today",
         )
-        self.assertEqual(entities[0].get("name"), "Net profit (EUR)")
+        self.assertEqual(entities[1].get("name"), "Realized (EUR)")
 
     def test_import_price_forecast_uses_full_zonneplan_horizon(self) -> None:
         wrapper = next(

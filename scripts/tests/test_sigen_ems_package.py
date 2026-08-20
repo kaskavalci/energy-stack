@@ -10,6 +10,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PACKAGE_PATH = REPO_ROOT / "home-assistant" / "ha_sigen_ems.yaml"
 DASHBOARD_PACKAGE_PATH = REPO_ROOT / "home-assistant" / "ha_emhass_dashboard.yaml"
+HELPERS_PACKAGE_PATH = REPO_ROOT / "home-assistant" / "ha_emhass_helpers.yaml"
 MONITORING_PACKAGE_PATH = REPO_ROOT / "home-assistant" / "ha_emhass_monitoring.yaml"
 
 
@@ -480,19 +481,16 @@ class EmhassPlanValidityPresentationTests(unittest.TestCase):
             REPO_ROOT / "home-assistant" / "ha_emhass_dashboard.yaml"
         ).read_text(encoding="utf-8")
 
-    def test_valid_plan_stays_positive_and_problem_is_separate(self) -> None:
+    def test_plan_valid_mirrors_mpc_fresh_without_problem_alias(self) -> None:
         valid = self.package.split(
             "      - name: EMHASS plan valid\n", 1
-        )[1].split("      - name: EMHASS plan problem\n", 1)[0]
-        self.assertNotIn("device_class: problem", valid)
-        self.assertIn("      - name: EMHASS plan problem\n", self.package)
-        problem = self.package.split(
-            "      - name: EMHASS plan problem\n", 1
         )[1].split("      - name: EMHASS control allowed\n", 1)[0]
-        self.assertIn("device_class: problem", problem)
+        self.assertNotIn("device_class: problem", valid)
+        self.assertNotIn("EMHASS plan problem", self.package)
+        self.assertNotIn("emhass_plan_problem", self.package)
         self.assertIn(
-            'state: "{{ not is_state(\'binary_sensor.emhass_mpc_fresh\', \'on\') }}"',
-            problem,
+            'state: "{{ is_state(\'binary_sensor.emhass_mpc_fresh\', \'on\') }}"',
+            valid,
         )
 
 
@@ -508,7 +506,7 @@ class EmhassNetElectricityProfitTests(unittest.TestCase):
     def test_today_profit_is_production_minus_delivery(self) -> None:
         today = self._sensor_block(
             "EMHASS net electricity profit today",
-            "EMHASS net electricity profit month",
+            "EMHASS planned profit today",
         )
         self.assertIn("default_entity_id: sensor.emhass_net_electricity_profit_today", today)
         self.assertIn("unit_of_measurement: EUR", today)
@@ -526,6 +524,28 @@ class EmhassNetElectricityProfitTests(unittest.TestCase):
         self.assertIn("production:", today)
         self.assertIn("delivery:", today)
 
+    def test_planned_profit_today_reads_helper_payload(self) -> None:
+        planned = self._sensor_block(
+            "EMHASS planned profit today",
+            "EMHASS net electricity profit month",
+        )
+        self.assertIn("default_entity_id: sensor.emhass_planned_profit_today", planned)
+        self.assertIn("unit_of_measurement: EUR", planned)
+        self.assertIn("device_class: monetary", planned)
+        self.assertIn("state_class: total", planned)
+        self.assertIn("input_text.emhass_planned_profit_payload", planned)
+        self.assertIn("from_json", planned)
+        self.assertIn("now().strftime('%Y-%m-%d')", planned)
+        self.assertIn("unknown", planned)
+        self.assertIn("plan_date:", planned)
+        self.assertIn("locked_at:", planned)
+        self.assertIn("slot_count:", planned)
+        self.assertIn("coverage_start:", planned)
+        self.assertIn("coverage_end_exclusive:", planned)
+        self.assertIn("partial:", planned)
+        self.assertNotIn("rest_command", planned)
+        self.assertNotIn("/api/states/sensor.emhass_planned_profit_today", planned)
+
     def test_month_profit_is_production_minus_delivery(self) -> None:
         month = self._sensor_block(
             "EMHASS net electricity profit month",
@@ -541,6 +561,14 @@ class EmhassNetElectricityProfitTests(unittest.TestCase):
         self.assertIn("production - delivery", month)
         self.assertIn("unknown", month)
         self.assertNotIn("excl_tax", month)
+
+
+class EmhassPlannedProfitHelperTests(unittest.TestCase):
+    def test_planned_profit_payload_helper_exists(self) -> None:
+        helpers = HELPERS_PACKAGE_PATH.read_text(encoding="utf-8")
+        self.assertIn("input_text:", helpers)
+        self.assertIn("emhass_planned_profit_payload:", helpers)
+        self.assertIn("max: 255", helpers)
 
 
 class EmhassMpcFreshnessContractTests(unittest.TestCase):

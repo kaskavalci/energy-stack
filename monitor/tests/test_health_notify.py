@@ -5,8 +5,11 @@ import json
 import sys
 import tempfile
 import unittest
+import urllib.error
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -870,6 +873,171 @@ class RecoverableIncidentEscalationTests(unittest.TestCase):
             owned = reloaded[health_notify.OWNERSHIP_STATE_KEY]
             self.assertFalse(owned.ownership_desired_active)
             self.assertFalse(owned.ownership_pending)
+
+
+class PlannedProfitDeadlineTests(unittest.TestCase):
+    CEST = ZoneInfo("Europe/Amsterdam")
+
+    @staticmethod
+    def write_lock(share: Path, target: str) -> None:
+        (share / health_notify.PLANNED_PROFIT_JSON).write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "timezone": "Europe/Amsterdam",
+                    "metric": "emhass_cost_profit_covered_slots",
+                    "days": {
+                        target: {
+                            "plan_date": target,
+                            "planned_eur": 1.0,
+                            "slot_count": 1,
+                            "partial": True,
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    def test_before_2200_does_not_notify(self):
+        share = Path(tempfile.mkdtemp())
+        state = {}
+        now = datetime(2026, 8, 16, 21, 30, tzinfo=self.CEST)
+        with patch.object(health_notify, "notify_ha") as notify:
+            sent = health_notify.process_planned_profit_deadline(
+                share=share,
+                state=state,
+                now=now,
+                base_url="http://ha/",
+                token="token",
+                service="notify.notify",
+            )
+        self.assertEqual(sent, 0)
+        notify.assert_not_called()
+
+    def test_2200_missing_sends_once(self):
+        share = Path(tempfile.mkdtemp())
+        state = {}
+        now = datetime(2026, 8, 16, 22, 0, tzinfo=self.CEST)
+        with patch.object(health_notify, "notify_ha") as notify:
+            sent = health_notify.process_planned_profit_deadline(
+                share=share,
+                state=state,
+                now=now,
+                base_url="http://ha/",
+                token="token",
+                service="notify.notify",
+            )
+        self.assertEqual(sent, 1)
+        notify.assert_called_once()
+        entry = state[health_notify.PLANNED_PROFIT_STATE_KEY]
+        self.assertEqual(
+            entry.notification_signature,
+            "planned_profit_missing:2026-08-17",
+        )
+
+    def test_same_target_does_not_repeat_after_success(self):
+        share = Path(tempfile.mkdtemp())
+        state = {
+            health_notify.PLANNED_PROFIT_STATE_KEY: health_notify.AlertState(
+                last_notify=100.0,
+                notification_signature="planned_profit_missing:2026-08-17",
+            )
+        }
+        now = datetime(2026, 8, 16, 22, 30, tzinfo=self.CEST)
+        with patch.object(health_notify, "notify_ha") as notify:
+            sent = health_notify.process_planned_profit_deadline(
+                share=share,
+                state=state,
+                now=now,
+                base_url="http://ha/",
+                token="token",
+                service="notify.notify",
+            )
+        self.assertEqual(sent, 0)
+        notify.assert_not_called()
+
+    def test_delivery_failure_retries(self):
+        share = Path(tempfile.mkdtemp())
+        state = {}
+        now = datetime(2026, 8, 16, 22, 0, tzinfo=self.CEST)
+        with patch.object(
+            health_notify,
+            "notify_ha",
+            side_effect=urllib.error.HTTPError(
+                "url", 500, "fail", hdrs=None, fp=None
+            ),
+        ):
+            sent = health_notify.process_planned_profit_deadline(
+                share=share,
+                state=state,
+                now=now,
+                base_url="http://ha/",
+                token="token",
+                service="notify.notify",
+            )
+        self.assertEqual(sent, 0)
+        entry = state[health_notify.PLANNED_PROFIT_STATE_KEY]
+        self.assertFalse(entry.last_notify)
+
+    def test_late_lock_clears_pending_without_recovery_notify(self):
+        share = Path(tempfile.mkdtemp())
+        self.write_lock(share, "2026-08-17")
+        state = {
+            health_notify.PLANNED_PROFIT_STATE_KEY: health_notify.AlertState(
+                last_notify=100.0,
+                notification_signature="planned_profit_missing:2026-08-17",
+            )
+        }
+        now = datetime(2026, 8, 16, 21, 30, tzinfo=self.CEST)
+        with patch.object(health_notify, "notify_ha") as notify:
+            sent = health_notify.process_planned_profit_deadline(
+                share=share,
+                state=state,
+                now=now,
+                base_url="http://ha/",
+                token="token",
+                service="notify.notify",
+            )
+        self.assertEqual(sent, 0)
+        notify.assert_not_called()
+        entry = state[health_notify.PLANNED_PROFIT_STATE_KEY]
+        self.assertIsNone(entry.notification_signature)
+
+    def test_malformed_json_uses_invalid_message_once(self):
+        share = Path(tempfile.mkdtemp())
+        (share / health_notify.PLANNED_PROFIT_JSON).write_text(
+            "{bad", encoding="utf-8"
+        )
+        state = {}
+        now = datetime(2026, 8, 16, 22, 0, tzinfo=self.CEST)
+        with patch.object(health_notify, "notify_ha") as notify:
+            health_notify.process_planned_profit_deadline(
+                share=share,
+                state=state,
+                now=now,
+                base_url="http://ha/",
+                token="token",
+                service="notify.notify",
+            )
+        notify.assert_called_once()
+        self.assertIn("invalid", notify.call_args.args[4])
+
+    def test_dst_2200_uses_amsterdam(self):
+        share = Path(tempfile.mkdtemp())
+        state = {}
+        now = datetime(2026, 10, 25, 22, 0, tzinfo=self.CEST)
+        with patch.object(health_notify, "notify_ha") as notify:
+            sent = health_notify.process_planned_profit_deadline(
+                share=share,
+                state=state,
+                now=now,
+                base_url="http://ha/",
+                token="token",
+                service="notify.notify",
+            )
+        self.assertEqual(sent, 1)
+        notify.assert_called_once()
 
 
 if __name__ == "__main__":

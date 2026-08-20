@@ -1,7 +1,7 @@
 # Entity and package contract (cross-repo)
 
-**Last updated:** 2026-08-05  
-**Author:** Cursor Grok 4.5
+**Last updated:** 2026-08-19  
+**Author:** Composer
 
 EMHASS on the energy host and HA packages in this repo depend on stable entity IDs on Home Assistant. Some IDs are created by the **reterminal** repo (P1 MQTT aliases and daily helpers).
 
@@ -46,6 +46,8 @@ Package keys keep the `reterminal_emhass_*` prefix on live HA for zero-downtime 
 | `sensor.emhass_house_load_sample_w` | energy-stack templates | EMHASS history / naive-forecast source, sampled every minute (W) |
 | `sensor.emhass_pv_power_w` | energy-stack templates | PV observation |
 | `sensor.zonneplan_current_electricity_tariff` | HA HACS | emhass-cron price fetch |
+| `input_text.emhass_planned_profit_payload` | energy-stack helpers | Cron compact planned-profit JSON transport (≤255 chars) |
+| `sensor.emhass_planned_profit_today` | energy-stack templates | Trading dashboard planned covered-slot profit |
 | `sensor.sigen_0_plant_battery_soc` | sigenergy2mqtt | MPC `soc_init` |
 | Envoy `sensor.envoy_*` | HA integration | PV truth (AC-coupled) |
 

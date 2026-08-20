@@ -25,3 +25,8 @@ input_datetime:
     has_date: true
     has_time: true
     icon: mdi:clock-check-outline
+
+input_text:
+  emhass_planned_profit_payload:
+    name: EMHASS planned profit payload
+    max: 255

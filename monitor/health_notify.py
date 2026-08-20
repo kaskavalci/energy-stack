@@ -18,13 +18,15 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 LOAD_HISTORY_STATE_KEY = "_load_history_incident"
 LOAD_HISTORY_ROOT_ENTITY = "input_boolean.emhass_load_history_root_active"
 OWNERSHIP_STATE_KEY = "_load_history_root_ownership"
+PLANNED_PROFIT_STATE_KEY = "planned_profit_missing"
+PLANNED_PROFIT_JSON = "daily_planned_profit.json"
 
 
 from weather_cache_stale import (
@@ -1159,6 +1161,86 @@ def check_last_run(share: Path) -> list[tuple[str, str]]:
     return problems
 
 
+def planned_profit_alert_signature(target: date) -> str:
+    return f"planned_profit_missing:{target.isoformat()}"
+
+
+def local_deadline_reached(now: datetime) -> bool:
+    local = now.astimezone(TZ)
+    return (local.hour, local.minute) >= (22, 0)
+
+
+def lock_state_for_target(share: Path, target: date) -> str:
+    path = share / PLANNED_PROFIT_JSON
+    if not path.is_file():
+        return "missing"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return "invalid"
+    days = data.get("days")
+    if not isinstance(days, dict):
+        return "invalid"
+    record = days.get(target.isoformat())
+    if not isinstance(record, dict):
+        return "missing"
+    if record.get("plan_date") != target.isoformat():
+        return "invalid"
+    return "locked"
+
+
+def process_planned_profit_deadline(
+    *,
+    share: Path,
+    state: dict[str, AlertState],
+    now: datetime,
+    base_url: str,
+    token: str,
+    service: str,
+) -> int:
+    local_now = now.astimezone(TZ)
+    target = local_now.date() + timedelta(days=1)
+    signature = planned_profit_alert_signature(target)
+    entry = state.setdefault(PLANNED_PROFIT_STATE_KEY, AlertState())
+    lock_state = lock_state_for_target(share, target)
+
+    if not local_deadline_reached(local_now):
+        if lock_state == "locked" and entry.notification_signature == signature:
+            entry.notification_signature = None
+            entry.last_notify = 0.0
+        return 0
+
+    if lock_state == "locked":
+        if entry.notification_signature == signature:
+            entry.notification_signature = None
+            entry.last_notify = 0.0
+        return 0
+
+    if entry.notification_signature == signature and entry.last_notify:
+        return 0
+
+    if lock_state == "missing":
+        message = (
+            f"No EMHASS planned-profit lock exists for tomorrow "
+            f"({target.isoformat()}). A day-ahead price forecast or a successful "
+            f"MPC may be missing."
+        )
+    else:
+        message = (
+            f"EMHASS planned-profit lock record is invalid; tomorrow "
+            f"({target.isoformat()}) is treated as unlocked."
+        )
+
+    try:
+        notify_ha(base_url, token, service, "Energy: Planned profit", message)
+        entry.notification_signature = signature
+        entry.last_notify = local_now.timestamp()
+        return 1
+    except (urllib.error.HTTPError, OSError, urllib.error.URLError) as exc:
+        logging.error("Planned profit notify failed: %s", exc)
+        return 0
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
     secrets = Path(os.environ.get("EMAHASS_SECRETS", DEFAULT_SECRETS))
@@ -1302,6 +1384,15 @@ def main() -> int:
             base_url=base_url,
             token=token,
         )
+
+    sent += process_planned_profit_deadline(
+        share=share,
+        state=alert_state,
+        now=datetime.now(TZ),
+        base_url=base_url,
+        token=token,
+        service=notify_svc,
+    )
 
     persist_alert_state(share, alert_state)
 

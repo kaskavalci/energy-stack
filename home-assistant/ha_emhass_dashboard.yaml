@@ -142,6 +142,57 @@ template:
           delivery: >
             {{ states('sensor.zonneplan_electricity_delivery_costs_today') | float(none) }}
 
+      - name: EMHASS planned profit today
+        unique_id: emhass_planned_profit_today
+        default_entity_id: sensor.emhass_planned_profit_today
+        unit_of_measurement: EUR
+        device_class: monetary
+        state_class: total
+        icon: mdi:cash-clock
+        state: >
+          {% set raw = states('input_text.emhass_planned_profit_payload') %}
+          {% if raw in ['unknown', 'unavailable', 'none', ''] %}
+            unknown
+          {% else %}
+            {% set p = raw | from_json %}
+            {% if p.plan_date is defined and p.plan_date == now().strftime('%Y-%m-%d') and p.planned_eur is defined %}
+              {{ p.planned_eur }}
+            {% else %}
+              unknown
+            {% endif %}
+          {% endif %}
+        attributes:
+          plan_date: >
+            {% set raw = states('input_text.emhass_planned_profit_payload') %}
+            {% if raw not in ['unknown', 'unavailable', 'none', ''] %}
+              {{ (raw | from_json).plan_date | default(none) }}
+            {% endif %}
+          locked_at: >
+            {% set raw = states('input_text.emhass_planned_profit_payload') %}
+            {% if raw not in ['unknown', 'unavailable', 'none', ''] %}
+              {{ (raw | from_json).locked_at | default(none) }}
+            {% endif %}
+          slot_count: >
+            {% set raw = states('input_text.emhass_planned_profit_payload') %}
+            {% if raw not in ['unknown', 'unavailable', 'none', ''] %}
+              {{ (raw | from_json).slot_count | default(none) }}
+            {% endif %}
+          coverage_start: >
+            {% set raw = states('input_text.emhass_planned_profit_payload') %}
+            {% if raw not in ['unknown', 'unavailable', 'none', ''] %}
+              {{ (raw | from_json).coverage_start | default(none) }}
+            {% endif %}
+          coverage_end_exclusive: >
+            {% set raw = states('input_text.emhass_planned_profit_payload') %}
+            {% if raw not in ['unknown', 'unavailable', 'none', ''] %}
+              {{ (raw | from_json).coverage_end_exclusive | default(none) }}
+            {% endif %}
+          partial: >
+            {% set raw = states('input_text.emhass_planned_profit_payload') %}
+            {% if raw not in ['unknown', 'unavailable', 'none', ''] %}
+              {{ (raw | from_json).partial | default(none) }}
+            {% endif %}
+
       - name: EMHASS net electricity profit month
         unique_id: emhass_net_electricity_profit_month
         default_entity_id: sensor.emhass_net_electricity_profit_month
@@ -213,12 +264,6 @@ template:
         default_entity_id: binary_sensor.emhass_plan_valid
         icon: mdi:check-circle
         state: "{{ is_state('binary_sensor.emhass_mpc_fresh', 'on') }}"
-
-      - name: EMHASS plan problem
-        unique_id: emhass_plan_problem
-        default_entity_id: binary_sensor.emhass_plan_problem
-        device_class: problem
-        state: "{{ not is_state('binary_sensor.emhass_mpc_fresh', 'on') }}"
 
       - name: EMHASS control allowed
         unique_id: emhass_control_allowed

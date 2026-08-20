@@ -16,10 +16,12 @@ from zoneinfo import ZoneInfo
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "lib"))
+sys.path.insert(0, str(REPO_ROOT / "emhass-cron"))
 
 MODULE_PATH = REPO_ROOT / "emhass-cron" / "fetch_prices_emhass.py"
 SPEC = importlib.util.spec_from_file_location("fetch_prices_emhass", MODULE_PATH)
 fetch_prices_emhass = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = fetch_prices_emhass
 assert SPEC.loader is not None
 SPEC.loader.exec_module(fetch_prices_emhass)
 
@@ -1161,11 +1163,22 @@ class MpcLoadHistoryFailureTests(unittest.TestCase):
         )
         return secrets
 
-    def invoke_main(self, share: Path, secrets: Path) -> int:
+    def invoke_main(
+        self,
+        share: Path,
+        secrets: Path,
+        *,
+        patch_planned_profit: bool = True,
+        finalize_result: bool = True,
+        finalize_side_effect=None,
+    ) -> int:
         prices = {
             f"2026-07-26T{hour:02d}:00:00+02:00": 0.20
             for hour in range(10, 22)
         }
+        forecast = [
+            {"datetime": "2026-07-27T00:00:00+00:00", "electricity_price": 1},
+        ]
         argv = [
             "fetch_prices_emhass.py",
             "--action",
@@ -1188,6 +1201,21 @@ class MpcLoadHistoryFailureTests(unittest.TestCase):
                     fetch_prices_emhass,
                     "fetch_soc_limit",
                     return_value=0.05,
+                )
+            )
+            stack.enter_context(
+                patch.object(
+                    fetch_prices_emhass,
+                    "load_price_snapshot",
+                    return_value=fetch_prices_emhass.PriceSnapshot(
+                        state={
+                            "state": "0.20",
+                            "last_updated": "2026-07-26T12:00:00+02:00",
+                            "attributes": {"forecast": forecast},
+                        },
+                        prices=prices,
+                        last_updated="2026-07-26T12:00:00+02:00",
+                    ),
                 )
             )
             stack.enter_context(
@@ -1218,13 +1246,25 @@ class MpcLoadHistoryFailureTests(unittest.TestCase):
             self.emhass_action = stack.enter_context(
                 patch.object(fetch_prices_emhass, "call_emhass_action")
             )
+            finalize_kwargs = (
+                {"side_effect": finalize_side_effect}
+                if finalize_side_effect is not None
+                else {"return_value": finalize_result}
+            )
             self.finalizer = stack.enter_context(
                 patch.object(
                     fetch_prices_emhass,
                     "finalize_successful_mpc_run",
-                    return_value=True,
+                    **finalize_kwargs,
                 )
             )
+            if patch_planned_profit:
+                stack.enter_context(
+                    patch.object(
+                        fetch_prices_emhass,
+                        "run_planned_profit_side_effect",
+                    )
+                )
             stack.enter_context(patch.object(sys, "argv", argv))
             return fetch_prices_emhass.main()
 
@@ -1997,8 +2037,6 @@ class MpcLoadHistoryFailureTests(unittest.TestCase):
                         soc_min_response,
                         soc_max_response,
                         price_response,
-                        price_response,
-                        price_response,
                         history_response,
                         marker_response,
                     ],
@@ -2007,6 +2045,10 @@ class MpcLoadHistoryFailureTests(unittest.TestCase):
                     fetch_prices_emhass,
                     "run_mpc_chain",
                 ) as run_mpc_chain,
+                patch.object(
+                    fetch_prices_emhass,
+                    "run_planned_profit_side_effect",
+                ) as planned_profit_side_effect,
                 patch.object(sys, "argv", argv),
             ):
                 exit_code = fetch_prices_emhass.main()
@@ -2034,19 +2076,18 @@ class MpcLoadHistoryFailureTests(unittest.TestCase):
                 "/api/states/sensor.test_soc_min",
                 "/api/states/sensor.test_soc_max",
                 "/api/states/sensor.test_price",
-                "/api/states/sensor.test_price",
-                "/api/states/sensor.test_price",
                 "/api/history/period/2026-07-27T12%3A00%3A00%2B00%3A00",
                 "/api/services/input_datetime/set_datetime",
             ],
         )
         self.assertEqual(
             request_authorizations,
-            ["Bearer main-history-token"] * 8,
+            ["Bearer main-history-token"] * 6,
         )
-        self.assertEqual(request_hosts, ["ha.local:8123"] * 8)
+        self.assertEqual(request_hosts, ["ha.local:8123"] * 6)
         self.assertIsNone(run_mpc_chain.call_args.kwargs["soc_init"])
         run_mpc_chain.assert_called_once()
+        planned_profit_side_effect.assert_called_once()
         self.assertTrue(status["mpc"]["ok"])
 
     def test_unexpected_runtime_error_is_not_reclassified(self):
@@ -2066,6 +2107,167 @@ class MpcLoadHistoryFailureTests(unittest.TestCase):
         self.assertNotIn("mpc", status)
         self.emhass_action.assert_not_called()
         self.finalizer.assert_not_called()
+
+    def test_planned_profit_lock_runs_only_after_successful_finalization(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            share = Path(tmp)
+            secrets = self.write_valid_inputs(share)
+            with patch.object(
+                fetch_prices_emhass,
+                "validate_native_load_history",
+                return_value=self.degraded_summary(),
+            ), patch.object(
+                fetch_prices_emhass,
+                "run_planned_profit_side_effect",
+            ) as side_effect:
+                exit_code = self.invoke_main(
+                    share, secrets, finalize_result=False
+                )
+
+        self.assertEqual(exit_code, 1)
+        self.finalizer.assert_called_once()
+        side_effect.assert_not_called()
+
+    def test_planned_profit_aux_error_does_not_clear_mpc_ok(self):
+        import planned_profit as planned_profit_module
+
+        frozen_now = datetime(2026, 7, 26, 15, 0, tzinfo=ZoneInfo("Europe/Amsterdam"))
+
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                if tz is None:
+                    return frozen_now.replace(tzinfo=None)
+                return frozen_now.astimezone(tz)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            share = Path(tmp)
+            secrets = self.write_valid_inputs(share)
+
+            def finalize_and_mark(*args, **kwargs):
+                fetch_prices_emhass.write_run_status(share, "mpc", ok=True)
+                return True
+
+            with patch.object(
+                fetch_prices_emhass,
+                "validate_native_load_history",
+                return_value=self.degraded_summary(),
+            ), patch.object(
+                fetch_prices_emhass,
+                "datetime",
+                FrozenDateTime,
+            ), patch.object(
+                planned_profit_module,
+                "read_opt_res_via_docker",
+                side_effect=RuntimeError("docker read failed"),
+            ):
+                exit_code = self.invoke_main(
+                    share,
+                    secrets,
+                    patch_planned_profit=False,
+                    finalize_side_effect=finalize_and_mark,
+                )
+            status = self.read_status(share)
+
+        self.assertEqual(exit_code, 0)
+        self.assertTrue(status["mpc"]["ok"])
+        self.assertFalse(status["planned_profit"]["ok"])
+
+
+class PriceSnapshotReuseTests(unittest.TestCase):
+    @staticmethod
+    def price_state(now: datetime) -> dict:
+        forecast = [
+            {
+                "datetime": (
+                    now.replace(minute=0, second=0, microsecond=0)
+                    + timedelta(hours=index)
+                ).isoformat(),
+                "electricity_price": 2_000_000,
+            }
+            for index in range(13)
+        ]
+        return {
+            "entity_id": "sensor.test_price",
+            "state": "0.20",
+            "last_changed": now.isoformat(),
+            "last_updated": now.isoformat(),
+            "attributes": {"forecast": forecast},
+        }
+
+    def test_price_fetch_summary_does_not_refetch_for_csv_write(self):
+        now = datetime(
+            2026,
+            7,
+            27,
+            15,
+            34,
+            tzinfo=ZoneInfo("Europe/Amsterdam"),
+        )
+
+        class FrozenDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                if tz is None:
+                    return now.replace(tzinfo=None)
+                return now.astimezone(tz)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            share = Path(tmp)
+            (share / "config.json").write_text(
+                json.dumps(
+                    {
+                        "prediction_horizon": 3,
+                        "optimization_time_step": 30,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            secrets = share / "secrets.yaml"
+            secrets.write_text(
+                "hass_url: http://ha.local:8123\n"
+                "long_lived_token: test-token\n",
+                encoding="utf-8",
+            )
+            with (
+                patch.object(
+                    fetch_prices_emhass,
+                    "datetime",
+                    FrozenDateTime,
+                ),
+                patch.object(
+                    fetch_prices_emhass,
+                    "fetch_ha_state",
+                    return_value=self.price_state(now),
+                ) as mock_fetch_ha_state,
+            ):
+                snapshot = fetch_prices_emhass.load_price_snapshot(
+                    secrets,
+                    share,
+                    price_sensor="sensor.test_price",
+                    tz_name="Europe/Amsterdam",
+                )
+                self.assertEqual(mock_fetch_ha_state.call_count, 1)
+
+                fetch_prices_emhass.price_fetch_summary(
+                    secrets,
+                    share,
+                    price_sensor="sensor.test_price",
+                    tz_name="Europe/Amsterdam",
+                    export_haircut=0.0,
+                    snapshot=snapshot,
+                )
+                self.assertEqual(mock_fetch_ha_state.call_count, 1)
+
+                fetch_prices_emhass.refresh_price_csvs_from_ha(
+                    secrets,
+                    share,
+                    price_sensor="sensor.test_price",
+                    tz_name="Europe/Amsterdam",
+                    export_haircut=0.0,
+                    snapshot=snapshot,
+                )
+                self.assertEqual(mock_fetch_ha_state.call_count, 1)
 
 
 class ResolveSocFinalTests(unittest.TestCase):

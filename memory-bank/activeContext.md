@@ -1,7 +1,51 @@
 # Active Context
 
-**Last updated:** 2026-08-09
+**Last updated:** 2026-08-20
 **Author:** Composer
+
+## EMHASS daily planned profit — repo-ready, not deployed (2026-08-19)
+
+Branch `feature/emhass-daily-planned-profit` implements covered-slot planned
+profit lock after successful MPC:
+
+- One Zonneplan price snapshot per MPC (`PriceSnapshot` in `fetch_prices_emhass.py`).
+- Write-once `/share/daily_planned_profit.json`; HA helper
+  `input_text.emhass_planned_profit_payload`; template
+  `sensor.emhass_planned_profit_today`.
+- Trading dashboard: planned today + 7-day planned vs realized graph.
+- Monitor: one `notify.notify` after 22:00 if tomorrow lock missing.
+- Spec: `docs/superpowers/specs/2026-08-16-emhass-daily-planned-profit-design.md`;
+  plan: `docs/superpowers/plans/2026-08-17-emhass-daily-planned-profit.md`.
+
+Deploy needs operator approval (`deploy-energy-stack.sh`, then
+`deploy-home-assistant.sh`). Commit only planned-profit feature files; do not
+include unrelated dirty-tree items (caveman skills, `tmp_emhass_now.py`,
+`deploy-all.sh`).
+
+Corrupt `/share/daily_planned_profit.json` is fail-closed: cron does not
+overwrite it. Successful MPC no-op runs write `planned_profit.ok=true` so a
+prior auxiliary error does not stick. After midnight the HA sensor stays
+`unknown` until the first successful MPC of that date republishes the helper.
+
+## Trading Status — drop plan problem (2026-08-12) — DEPLOYED
+
+Removed `binary_sensor.emhass_plan_problem`. Kept
+`binary_sensor.emhass_plan_valid`. HA deploy
+`energy-stack-20260812-230725`; orphan removed from entity registry
+(HTTP 404 on state).
+
+## Trading Prices card — Zonneplan tariff group (2026-08-12) — DEPLOYED
+
+Same HA deploy. Prices card shows
+`sensor.zonneplan_current_tariff_group` (label **Tariff group**).
+`sensor.emhass_price_rank_now` template still in package (unused by card).
+
+## Temporary prediction_horizon 12 — RESTORED to 32 (2026-08-11 ~12:26 CEST)
+
+Envoy outage recovery complete. Trading/MPC healthy on horizon 12; load
+history now **32/32** healthy. Live `prediction_horizon` **12 → 32** on
+energy host + local gitignored copy. Backup:
+`config.json.bak-horizon32-*`. Next natural MPC uses full 16 h horizon.
 
 ## Plan vs battery overlay sign align — DEPLOYED then revised (2026-08-09)
 

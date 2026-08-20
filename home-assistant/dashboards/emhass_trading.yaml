@@ -9,7 +9,6 @@ views:
         entities:
           - entity: sensor.optim_status
           - entity: binary_sensor.emhass_plan_valid
-          - entity: binary_sensor.emhass_plan_problem
           - entity: binary_sensor.emhass_control_allowed
           - entity: input_boolean.emhass_auto_control_master
           - entity: input_select.emhass_ems_mode_native
@@ -32,22 +31,27 @@ views:
         entities:
           - entity: sensor.unit_load_cost
           - entity: sensor.unit_prod_price
-          - entity: sensor.emhass_price_rank_now
+          - entity: sensor.zonneplan_current_tariff_group
+            name: Tariff group
           - entity: sensor.emhass_net_electricity_profit_today
             name: Net profit today
+          - entity: sensor.emhass_planned_profit_today
+            name: Planned today (covered slots)
           - entity: sensor.emhass_net_electricity_profit_month
             name: Net profit this month
 
       - type: statistics-graph
-        title: Net electricity profit — last 7 days
+        title: Planned vs realized profit — last 7 days
         days_to_show: 7
         period: day
         chart_type: bar
         stat_types:
           - state
         entities:
+          - entity: sensor.emhass_planned_profit_today
+            name: Planned (covered slots, EUR)
           - entity: sensor.emhass_net_electricity_profit_today
-            name: Net profit (EUR)
+            name: Realized (EUR)
 
       - type: entities
         title: Actual (Sigen / P1)

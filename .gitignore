@@ -17,6 +17,9 @@ mosquitto/config/mosquitto.conf
 .bug-hunter/
 emhass/share/prices_fetched_at.txt
 emhass/share/last_enever_run.json
+emhass/share/daily_planned_profit.json
+emhass/share/daily_planned_profit.json.lock
+emhass/share/daily_planned_profit.json.tmp
 emhass/share/config.json.bak*
 
 memory-bank/notebook/

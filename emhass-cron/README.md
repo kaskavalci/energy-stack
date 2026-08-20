@@ -68,3 +68,21 @@ malformed price responses take the price-abort path. Expected filesystem,
 request, protocol, decoding, JSON, and response-shape failures enter their
 operation's narrow failure path; unexpected programming errors still
 propagate.
+
+## Planned profit lock
+
+After a successful MPC marker only (not dry-run, write-only, or failed runs):
+
+- Reuses the same Zonneplan price snapshot that wrote the CSV files.
+- Reads EMHASS `/data/opt_res_latest.csv` via `docker exec` (stdlib reader in `planned_profit.py`; no pandas in cron).
+- Locks covered-slot `cost_profit` for **tomorrow** (`Europe/Amsterdam`) into `/share/daily_planned_profit.json` (write-once per date, atomic replace, file lock, 14-day prune).
+- Publishes today's locked record to `input_text.emhass_planned_profit_payload` with `input_text.set_value` (compact JSON ≤255 chars).
+- `sensor.emhass_planned_profit_today` is a HA template sensor derived from that helper.
+- Metric is partial covered slots (`partial: true`), not a full calendar day.
+- Auxiliary lock/read/publish failure is recorded in `last_enever_run.json` under `planned_profit`; it does **not** set `mpc.ok=false`.
+- A successful run always writes `planned_profit.ok=true`, including no-op runs (lock already exists, or no tomorrow slots). This clears a prior auxiliary failure.
+- If `daily_planned_profit.json` exists but is malformed, cron does **not** replace it. It records `planned_profit.ok=false` and leaves the file for the 22:00 invalid-lock alert.
+- After midnight on the target date, `sensor.emhass_planned_profit_today` stays `unknown` until the first successful MPC republishes today's record (normally the next `:00`/`:30` slot).
+- `energy-monitor` sends one `notify.notify` after 22:00 local if tomorrow's lock is still missing.
+
+Design: [docs/superpowers/specs/2026-08-16-emhass-daily-planned-profit-design.md](../docs/superpowers/specs/2026-08-16-emhass-daily-planned-profit-design.md).

@@ -15,6 +15,7 @@ import math
 import os
 import sys
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from http.client import HTTPException
 from pathlib import Path
@@ -24,6 +25,7 @@ from urllib.parse import quote, urlencode, urlsplit
 from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
+from planned_profit import run_planned_profit_side_effect
 from weather_cache_stale import (
     clear_weather_cache_files,
     docker_available,
@@ -603,24 +605,25 @@ def expand_hourly_to_time_step(
     return out
 
 
-def fetch_prices_from_ha(
-    secrets_path: Path,
+@dataclass(frozen=True)
+class PriceSnapshot:
+    state: dict[str, Any]
+    prices: dict[str, float]
+    last_updated: str | None
+
+
+def prices_from_ha_state(
+    state: dict[str, Any],
     share_dir: Path,
     *,
-    price_sensor: str,
     tz_name: str,
-    credentials: tuple[str, str] | None = None,
+    price_sensor: str,
 ) -> dict[str, float]:
     tz = ZoneInfo(tz_name)
     now = datetime.now(tz)
     step_min = read_optimization_time_step_min(share_dir)
     slot_start = floor_to_step(now, step_min)
 
-    state = fetch_ha_state(
-        secrets_path,
-        price_sensor,
-        credentials=credentials,
-    )
     entity_state = str(state.get("state", "")).strip().lower()
     if entity_state in ("unavailable", "unknown", ""):
         raise RuntimeError(
@@ -653,6 +656,48 @@ def fetch_prices_from_ha(
     return prices
 
 
+def load_price_snapshot(
+    secrets_path: Path,
+    share_dir: Path,
+    *,
+    price_sensor: str,
+    tz_name: str,
+    credentials: tuple[str, str] | None = None,
+) -> PriceSnapshot:
+    state = fetch_ha_state(
+        secrets_path,
+        price_sensor,
+        credentials=credentials,
+    )
+    prices = prices_from_ha_state(
+        state,
+        share_dir,
+        tz_name=tz_name,
+        price_sensor=price_sensor,
+    )
+    last_updated = state.get("last_updated")
+    if last_updated is not None:
+        last_updated = str(last_updated)
+    return PriceSnapshot(state=state, prices=prices, last_updated=last_updated)
+
+
+def fetch_prices_from_ha(
+    secrets_path: Path,
+    share_dir: Path,
+    *,
+    price_sensor: str,
+    tz_name: str,
+    credentials: tuple[str, str] | None = None,
+) -> dict[str, float]:
+    return load_price_snapshot(
+        secrets_path,
+        share_dir,
+        price_sensor=price_sensor,
+        tz_name=tz_name,
+        credentials=credentials,
+    ).prices
+
+
 def price_fetch_summary(
     secrets_path: Path,
     share_dir: Path,
@@ -661,15 +706,19 @@ def price_fetch_summary(
     tz_name: str,
     export_haircut: float,
     credentials: tuple[str, str] | None = None,
+    snapshot: PriceSnapshot | None = None,
 ) -> dict[str, Any]:
     """Dry-run helper: fetch and expand without writing CSVs."""
     tz = ZoneInfo(tz_name)
-    state = fetch_ha_state(
-        secrets_path,
-        price_sensor,
-        credentials=credentials,
-    )
-    last_updated = state.get("last_updated")
+    if snapshot is None:
+        snapshot = load_price_snapshot(
+            secrets_path,
+            share_dir,
+            price_sensor=price_sensor,
+            tz_name=tz_name,
+            credentials=credentials,
+        )
+    last_updated = snapshot.last_updated
     age_min: float | None = None
     if last_updated:
         try:
@@ -678,13 +727,7 @@ def price_fetch_summary(
                 age_min = (datetime.now(tz) - lu).total_seconds() / 60.0
         except (TypeError, ValueError):
             pass
-    prices = fetch_prices_from_ha(
-        secrets_path,
-        share_dir,
-        price_sensor=price_sensor,
-        tz_name=tz_name,
-        credentials=credentials,
-    )
+    prices = snapshot.prices
     keys = sorted(prices.keys())
     n = len(prices)
     effective_h = resolve_prediction_horizon(share_dir, n)
@@ -709,14 +752,18 @@ def refresh_price_csvs_from_ha(
     tz_name: str,
     export_haircut: float,
     credentials: tuple[str, str] | None = None,
+    snapshot: PriceSnapshot | None = None,
 ) -> tuple[dict[str, float], dict[str, float], Path, Path]:
-    prices = fetch_prices_from_ha(
-        secrets_path,
-        share_dir,
-        price_sensor=price_sensor,
-        tz_name=tz_name,
-        credentials=credentials,
-    )
+    if snapshot is None:
+        prices = fetch_prices_from_ha(
+            secrets_path,
+            share_dir,
+            price_sensor=price_sensor,
+            tz_name=tz_name,
+            credentials=credentials,
+        )
+    else:
+        prices = snapshot.prices
     prod_prices = apply_export_haircut(prices, export_haircut)
     load_csv, prod_csv = write_price_csvs(
         prices, prod_prices, share_dir, tz_name=tz_name
@@ -1556,15 +1603,34 @@ def main() -> int:
             soc_min=soc_min,
             share_dir=args.share_dir,
         )
+        price_snapshot: PriceSnapshot | None = None
         try:
-            price_summary = price_fetch_summary(
-                args.secrets,
-                args.share_dir,
-                price_sensor=args.price_sensor,
-                tz_name=args.timezone,
-                export_haircut=args.export_price_haircut,
-                credentials=load_history_credentials,
-            )
+            if args.dry_run:
+                price_summary = price_fetch_summary(
+                    args.secrets,
+                    args.share_dir,
+                    price_sensor=args.price_sensor,
+                    tz_name=args.timezone,
+                    export_haircut=args.export_price_haircut,
+                    credentials=load_history_credentials,
+                )
+            else:
+                price_snapshot = load_price_snapshot(
+                    args.secrets,
+                    args.share_dir,
+                    price_sensor=args.price_sensor,
+                    tz_name=args.timezone,
+                    credentials=load_history_credentials,
+                )
+                price_summary = price_fetch_summary(
+                    args.secrets,
+                    args.share_dir,
+                    price_sensor=args.price_sensor,
+                    tz_name=args.timezone,
+                    export_haircut=args.export_price_haircut,
+                    credentials=load_history_credentials,
+                    snapshot=price_snapshot,
+                )
         except (
             OSError,
             HTTPException,
@@ -1658,6 +1724,7 @@ def main() -> int:
                 tz_name=args.timezone,
                 export_haircut=args.export_price_haircut,
                 credentials=load_history_credentials,
+                snapshot=price_snapshot,
             )
             prediction_horizon = resolve_prediction_horizon(
                 args.share_dir, len(prices)
@@ -1721,6 +1788,14 @@ def main() -> int:
             load_history=load_history_summary,
             credentials=load_history_credentials,
         )
+        if finalized:
+            run_planned_profit_side_effect(
+                share_dir=args.share_dir,
+                snapshot=price_snapshot,
+                completed_at=completed_at,
+                secrets_path=args.secrets,
+                credentials=load_history_credentials,
+            )
         return 0 if finalized else 1
 
     logging.error("Unknown action %r", args.action)

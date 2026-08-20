@@ -53,7 +53,12 @@ WUD uses `docker.io/getwud/wud:8.3.0@sha256:1cf5ecfdbd2389847427fd9685c4fd337ee8
   That sensor's `state_class` is `total` (not `total_increasing`, since net
   profit can decrease intraday) and the `statistics-graph` card uses
   `stat_types: [state]` so each day's bar is the last recorded value that
-  day (closed day ≈ EOD P/L; today = live running P/L). Import price forecast
+  day (closed day ≈ EOD P/L; today = live running P/L). Trading dashboard also
+  shows `sensor.emhass_planned_profit_today` (covered-slot lock from cron JSON
+  via `input_text.emhass_planned_profit_payload`) and a dual 7-day planned vs
+  realized bar graph. Planned lock is write-once per local date in
+  `/share/daily_planned_profit.json`; auxiliary failure must not fail MPC.
+  Import price forecast
   uses **ApexCharts** wrapped in
   **config-template-card**, fed from Zonneplan
   `sensor.zonneplan_current_electricity_tariff` `forecast` (full day-ahead;
