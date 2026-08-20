@@ -87,11 +87,11 @@ that Compose backup, then run Compose with its WUD `--env-file` option.
 
 ### EMHASS upgrades
 
-- `docker-compose.yml` must use a release tag plus immutable digest, never
-  `latest`.
+- `docker-compose.yml` must use a fixed EMHASS release version (never `latest`).
+  Do not put a digest in Compose.
 - Before changing the EMHASS image, run
-  `./scripts/verify-emhass-load-gap-contract.sh '<tag@sha256:digest>'`, the
-  Compose pin test, and the full cron tests.
+  `./scripts/verify-emhass-load-gap-contract.sh '<version@sha256:digest>'`,
+  the Compose pin tests, and the full cron tests.
 - Record passing output in `docs/verification/emhass/`. Do not infer native
   interpolation compatibility from release notes alone.
 

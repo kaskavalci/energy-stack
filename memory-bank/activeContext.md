@@ -3,6 +3,24 @@
 **Last updated:** 2026-08-20
 **Author:** Composer
 
+## Docker image version pins — Phase 1 + EMHASS v0.18.1 DEPLOYED (2026-08-20)
+
+Branch `feature/docker-image-version-pins`. Energy host running version-only
+pins (no digest in Compose):
+
+| Service | Pin |
+|---------|-----|
+| `emhass` | `ghcr.io/davidusb-geek/emhass:v0.18.1` |
+| `sigenergy2mqtt` | `ghcr.io/seud0nym/sigenergy2mqtt:2026.8.8` |
+| `mosquitto` | `eclipse-mosquitto:2.1.2-alpine` |
+| `mqtt4dsmr` | `ghcr.io/antonijn/mqtt4dsmr:v0.9.7` |
+
+EMHASS bump: probe
+`EMHASS_LOAD_GAP_CONTRACT_OK version=0.18.1` recorded in
+`docs/verification/emhass/v0.18.1-load-gap-contract.md`. Hub has no
+`eclipse-mosquitto:2.1.2`; pin is `2.1.2-alpine`. `sigenergy2mqtt` bumped to
+`2026.8.8` (health endpoint / pymodbus 3.14 / #236).
+
 ## EMHASS daily planned profit — repo-ready, not deployed (2026-08-19)
 
 Branch `feature/emhass-daily-planned-profit` implements covered-slot planned

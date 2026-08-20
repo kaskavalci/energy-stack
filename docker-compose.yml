@@ -1,6 +1,6 @@
 services:
   mosquitto:
-    image: eclipse-mosquitto:latest
+    image: eclipse-mosquitto:2.1.2-alpine
     container_name: mosquitto
     restart: unless-stopped
     ports:
@@ -9,7 +9,7 @@ services:
       - ./mosquitto/config:/mosquitto/config:ro
 
   mqtt4dsmr:
-    image: ghcr.io/antonijn/mqtt4dsmr:latest
+    image: ghcr.io/antonijn/mqtt4dsmr:v0.9.7
     container_name: mqtt4dsmr
     restart: unless-stopped
     devices:
@@ -21,8 +21,7 @@ services:
       - mosquitto
 
   sigenergy2mqtt:
-    # Floating :latest is intentional (operator override of tag+digest pin policy).
-    image: ghcr.io/seud0nym/sigenergy2mqtt:latest
+    image: ghcr.io/seud0nym/sigenergy2mqtt:2026.8.8
     container_name: sigenergy2mqtt
     restart: unless-stopped
     volumes:
@@ -36,8 +35,7 @@ services:
       - SIGENERGY2MQTT_MQTT_ANONYMOUS=true
 
   emhass:
-    # Floating :latest is intentional (operator override of tag+digest pin policy).
-    image: ghcr.io/davidusb-geek/emhass:latest
+    image: ghcr.io/davidusb-geek/emhass:v0.18.1
     container_name: emhass
     restart: unless-stopped
     env_file:

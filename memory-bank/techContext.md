@@ -15,7 +15,7 @@
 | `emhass` | LP optimizer, Open-Meteo, publish-data `:5000` |
 | `emhass-cron` | `fetch_prices_emhass.py` |
 | `energy-monitor` | `health_notify.py` every 10 min |
-| `mosquitto`, `mqtt4dsmr`, `sigenergy2mqtt` | MQTT bridges (`emhass` + `sigenergy2mqtt` use floating `:latest` by operator choice; MQTT broker via env for early persistence) |
+| `mosquitto`, `mqtt4dsmr`, `sigenergy2mqtt` | MQTT bridges (version pins in Compose; WUD notify-only for upgrades) |
 | `wud` | Image update notifications only; one instance on each host, persistent `/store` volume |
 
 HA itself runs on the **HA host** via [`home-assistant/docker-compose.yml`](../home-assistant/docker-compose.yml) (`ghcr.io/home-assistant/home-assistant:stable`, `network_mode: host`), not on the energy host.
@@ -34,10 +34,13 @@ WUD uses `docker.io/getwud/wud:8.3.0@sha256:1cf5ecfdbd2389847427fd9685c4fd337ee8
   multiple, edge, unbracketed, or stale gaps fail closed.
 - Degraded mode still uses native `naive`; cron never sends a load list,
   `alpha`, or `beta`, and never writes synthetic HA recorder states.
-- EMHASS compose image is currently floating `:latest` (operator override;
-  comment in `docker-compose.yml`). Prefer re-pinning tag+digest and running
-  `scripts/verify-emhass-load-gap-contract.sh` before treating upgrades as
-  verified; record evidence under `docs/verification/emhass/` when re-pinning.
+- EMHASS compose image is a fixed release version (never `latest`; no digest in
+  Compose). Before bumping, run
+  `scripts/verify-emhass-load-gap-contract.sh '<version@sha256:digest>'` and
+  record evidence under `docs/verification/emhass/`.
+- Energy-host pins (2026-08-20): `emhass:v0.18.1`,
+  `sigenergy2mqtt:2026.8.8`, `mosquitto:2.1.2-alpine`, `mqtt4dsmr:v0.9.7`. Upgrade
+  loop: WUD notify → changelog → (EMHASS probe) → bump version → deploy.
 - Weather retry → `clear_weather_cache_files()` before `weather-forecast-cache`
 - Shared stale logic: `lib/weather_cache_stale.py`
 - WUD secrets are only in gitignored `config/wud.env`. Never print or commit

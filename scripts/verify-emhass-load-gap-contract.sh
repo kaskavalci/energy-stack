@@ -19,6 +19,13 @@ with compose_path.open(encoding="utf-8") as stream:
 print(compose["services"]["emhass"]["image"])
 PY
 )"
+if [[ "${#}" -lt 1 ]]; then
+  if [[ "${compose_image}" != *@sha256:* ]]; then
+    echo "Compose EMHASS image is version-only (${compose_image})." >&2
+    echo "Pass a candidate: $0 '<tag@sha256:digest>'" >&2
+    exit 2
+  fi
+fi
 image="${1:-${compose_image}}"
 
 if [[ ! "${image}" =~ :[^@[:space:]]+@sha256:[0-9a-f]{64}$ ]]; then
