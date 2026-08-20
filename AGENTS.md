@@ -59,8 +59,8 @@ untrusted network is denied. Do not configure firewall rules automatically.
 # Deploy order: reterminal HA first (P1 aliases), then energy-stack below
 
 ./scripts/setup-local.sh              # first clone only
-./scripts/deploy-energy-stack.sh      # energy host rsync + rebuild cron/monitor
-./scripts/deploy-home-assistant.sh    # render HA packages + deploy to HA Container
+./scripts/deploy-all.sh               # site.env + energy host + Home Assistant
+# Or: ./scripts/deploy-energy-stack.sh then ./scripts/deploy-home-assistant.sh
 
 ssh "${ENERGY_REMOTE_HOST}" 'docker ps --filter name=emhass'
 ```

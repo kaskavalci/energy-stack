@@ -72,6 +72,8 @@ Use the energy host **LAN IP** as seen from HA. `deploy-home-assistant.sh` prefl
 ## Deploy
 
 ```bash
+./scripts/deploy-all.sh               # site.env + energy host + Home Assistant
+# Or separately:
 ./scripts/deploy-energy-stack.sh      # rsync + rebuild cron/monitor on energy host
 ./scripts/deploy-home-assistant.sh    # render packages + merge into HA /config
 ```

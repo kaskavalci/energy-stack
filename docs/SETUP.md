@@ -93,6 +93,10 @@ Find your Envoy entity under **Settings → Devices → Enphase Envoy**. Sigener
 ## Deploy order
 
 ```bash
+# Both (loads config/site.env; works from fish as a normal script)
+./scripts/deploy-all.sh
+
+# Or separately:
 # 1. Energy host (ENERGY_REMOTE_HOST)
 ./scripts/deploy-energy-stack.sh
 
