@@ -8,13 +8,16 @@
 services:
   homeassistant:
     container_name: homeassistant
-    image: ghcr.io/home-assistant/home-assistant:stable
+    image: ghcr.io/home-assistant/home-assistant:2026.8.2
     network_mode: host
     # Must match HA time_zone (Europe/Amsterdam). Without this, container stays
     # UTC and as_timestamp() on naive input_datetime strings ages MPC plans ~2h
     # into the future → false plan_stale / control blocked.
     environment:
       TZ: Europe/Amsterdam
+    labels:
+      # Ignore GHCR .dev / beta tags so WUD only reports real X.Y.Z releases.
+      wud.tag.include: '^\d+\.\d+\.\d+$$'
     volumes:
       # Relative to the compose file directory (default: /opt/homeassistant).
       - ./config:/config

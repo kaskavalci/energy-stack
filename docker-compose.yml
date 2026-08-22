@@ -3,15 +3,20 @@ services:
     image: eclipse-mosquitto:2.1.2-alpine
     container_name: mosquitto
     restart: unless-stopped
+    labels:
+      # Official tags use X.Y.Z-alpine; ignore floating latest.
+      wud.tag.include: '^\d+\.\d+\.\d+-alpine$$'
     ports:
       - "1883:1883"
     volumes:
       - ./mosquitto/config:/mosquitto/config:ro
 
   mqtt4dsmr:
-    image: ghcr.io/antonijn/mqtt4dsmr:v0.9.7
+    image: ghcr.io/antonijn/mqtt4dsmr:v0.9.8
     container_name: mqtt4dsmr
     restart: unless-stopped
+    labels:
+      wud.tag.include: '^v\d+\.\d+\.\d+$$'
     devices:
       - /dev/ttyUSB0:/dev/ttyDSMR
     environment:
@@ -24,6 +29,9 @@ services:
     image: ghcr.io/seud0nym/sigenergy2mqtt:2026.8.8
     container_name: sigenergy2mqtt
     restart: unless-stopped
+    labels:
+      # CalVer releases only (YYYY.M.P); ignore alphas like 2026.8.9a3.
+      wud.tag.include: '^\d{4}\.\d+\.\d+$$'
     volumes:
       - ./sigenergy/sigenergy2mqtt.yaml:/data/sigenergy2mqtt.yaml
     depends_on:
@@ -38,6 +46,8 @@ services:
     image: ghcr.io/davidusb-geek/emhass:v0.18.1
     container_name: emhass
     restart: unless-stopped
+    labels:
+      wud.tag.include: '^v\d+\.\d+\.\d+$$'
     env_file:
       - config/site.env
     ports:

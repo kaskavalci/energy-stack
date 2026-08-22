@@ -1,12 +1,30 @@
 # Active Context
 
-**Last updated:** 2026-08-20
+**Last updated:** 2026-08-21
 **Author:** Composer
 
-## Docker image version pins — Phase 1 + EMHASS v0.18.1 DEPLOYED (2026-08-20)
+## Energy WUD cleanup — mqtt4dsmr v0.9.8 + tag filters (2026-08-21)
 
-Branch `feature/docker-image-version-pins`. Energy host running version-only
-pins (no digest in Compose):
+On `feature/ha-core-version-pin`: bumped `mqtt4dsmr` `v0.9.7` → `v0.9.8`
+(graceful exit / no-MBus crash / rate-limit fixes). Added `wud.tag.include` on
+energy-host images so alphas (e.g. sigenergy `2026.8.9a3`) do not flag updates.
+WUD :3000 reports `updateAvailable=0` after recreate.
+
+## HA Core version pin — DEPLOYED (2026-08-21)
+
+Branch `feature/ha-core-version-pin`. HA Container image
+`ghcr.io/home-assistant/home-assistant:2026.8.2` (was floating `:stable` /
+running `2026.8.1`). Patch changelog only. Label
+`wud.tag.include=^\d+\.\d+\.\d+$` so WUD ignores `.dev` tags. WUD on :3001
+reports `updateAvailable=false` for homeassistant. Note:
+`deploy-home-assistant.sh` only restarts HA; image bumps need
+`compose pull` + `up -d --force-recreate` (done manually this time).
+
+## Docker image version pins — DEPLOYED + merged to main (2026-08-21)
+
+Merged `feature/docker-image-version-pins` → `main` (`5e6c922`) and pushed.
+Energy host pins verified; manual MPC after deploy recreate recovered
+(`mpc.ok=true` @ 22:03 CEST; 22:00 fail was recreate race on weather clear).
 
 | Service | Pin |
 |---------|-----|
@@ -14,12 +32,6 @@ pins (no digest in Compose):
 | `sigenergy2mqtt` | `ghcr.io/seud0nym/sigenergy2mqtt:2026.8.8` |
 | `mosquitto` | `eclipse-mosquitto:2.1.2-alpine` |
 | `mqtt4dsmr` | `ghcr.io/antonijn/mqtt4dsmr:v0.9.7` |
-
-EMHASS bump: probe
-`EMHASS_LOAD_GAP_CONTRACT_OK version=0.18.1` recorded in
-`docs/verification/emhass/v0.18.1-load-gap-contract.md`. Hub has no
-`eclipse-mosquitto:2.1.2`; pin is `2.1.2-alpine`. `sigenergy2mqtt` bumped to
-`2026.8.8` (health endpoint / pymodbus 3.14 / #236).
 
 ## EMHASS daily planned profit — repo-ready, not deployed (2026-08-19)
 
