@@ -18,7 +18,7 @@
 | `mosquitto`, `mqtt4dsmr`, `sigenergy2mqtt` | MQTT bridges (version pins in Compose; WUD notify-only for upgrades) |
 | `wud` | Image update notifications only; one instance on each host, persistent `/store` volume |
 
-HA itself runs on the **HA host** via [`home-assistant/docker-compose.yml`](../home-assistant/docker-compose.yml) (`ghcr.io/home-assistant/home-assistant:2026.8.2`, `network_mode: host`), not on the energy host.
+HA itself runs on the **HA host** via [`home-assistant/docker-compose.yml`](../home-assistant/docker-compose.yml) (`ghcr.io/home-assistant/home-assistant:2026.8.3`, `network_mode: host`), not on the energy host.
 
 WUD uses `docker.io/getwud/wud:8.3.0@sha256:1cf5ecfdbd2389847427fd9685c4fd337ee8c74a0f584c52288d760d9a58811e` on both hosts. The energy-host UI uses port **3000**; the HA-host UI uses port **3001**. It is unauthenticated. Host firewall rules must enforce LAN-only access. Compose port mappings bind all interfaces by default, so operators must configure host firewall rules and verify that an untrusted network is denied. This repository does not configure firewall rules. WUD excludes local `emhass-cron` and `energy-monitor` builds. It sends Telegram notifications only and must not update containers automatically.
 

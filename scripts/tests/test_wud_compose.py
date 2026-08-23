@@ -98,7 +98,7 @@ class WudComposeTests(unittest.TestCase):
     def test_homeassistant_uses_fixed_release_version(self) -> None:
         image = self.ha["services"]["homeassistant"]["image"]
         self.assertEqual(
-            image, "ghcr.io/home-assistant/home-assistant:2026.8.2"
+            image, "ghcr.io/home-assistant/home-assistant:2026.8.3"
         )
         self.assertNotIn(":stable", image)
         self.assertNotIn(":latest", image)

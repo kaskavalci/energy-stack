@@ -15,7 +15,7 @@ Migrate Home Assistant from HAOS on the Pi 3 (`.109`) to Docker Container on Arm
 
 | Piece | Choice |
 |-------|--------|
-| Runtime | `ghcr.io/home-assistant/home-assistant:2026.8.2` via Compose |
+| Runtime | `ghcr.io/home-assistant/home-assistant:2026.8.3` via Compose |
 | Network | `network_mode: host` |
 | Preferred config dir | `/opt/homeassistant/config` |
 | Interim layout (no sudo) | `/home/halil/homeassistant/config` |
@@ -124,7 +124,7 @@ Done via SSH (`ssh ha` → Odroid `.75` as `halil`):
 
 - Docker 29.x + Compose v5.x present; user in `docker` group.
 - `/opt` not writable without password sudo → interim layout at `/home/halil/homeassistant/`.
-- Compose copied; `ghcr.io/home-assistant/home-assistant:2026.8.2` (was `:stable` at cutover).
+- Compose copied; `ghcr.io/home-assistant/home-assistant:2026.8.3` (was `:stable` at cutover).
 - HA container **not** started yet (avoids empty HA racing Pi with master on).
 
 For interim deploy until `/opt` is owned:

@@ -1,7 +1,12 @@
 # Active Context
 
-**Last updated:** 2026-08-21
+**Last updated:** 2026-08-23
 **Author:** Composer
+
+## HA Core 2026.8.3 — DEPLOYED (2026-08-23)
+
+Live pin `ghcr.io/home-assistant/home-assistant:2026.8.3`. WUD :3001 clear
+for homeassistant. Post-check Envoy PV + control gates after recreate.
 
 ## Energy WUD cleanup — mqtt4dsmr v0.9.8 + tag filters (2026-08-21)
 
