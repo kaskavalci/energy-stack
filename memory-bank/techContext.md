@@ -32,6 +32,11 @@ WUD uses `docker.io/getwud/wud:8.3.0@sha256:1cf5ecfdbd2389847427fd9685c4fd337ee8
   one fully bracketed interior gap of at most six consecutive 30-minute bins
   after the composite P1/PV/battery-derived sample is fresh (<=5 min). Longer,
   multiple, edge, unbracketed, or stale gaps fail closed.
+- Envoy freshness for PV / house-load / C1 is gated by
+  `binary_sensor.emhass_envoy_required` only: sun up, dawn grace **>30 min**,
+  current 30-minute `sensor.p_pv_forecast` **≥150 W** (`is_number`), and
+  `binary_sensor.emhass_mpc_fresh` on. Otherwise treat quiet Envoy as PV **0 W**
+  (fail open). Do not use `p_pv_forecast.last_updated` as freshness.
 - Degraded mode still uses native `naive`; cron never sends a load list,
   `alpha`, or `beta`, and never writes synthetic HA recorder states.
 - EMHASS compose image is a fixed release version (never `latest`; no digest in

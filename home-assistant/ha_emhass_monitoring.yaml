@@ -90,15 +90,16 @@ template:
         default_entity_id: binary_sensor.emhass_fail_pv_sensor
         device_class: problem
         state: >
-          {% if state_attr('sun.sun', 'elevation') | float(0) <= 8 %}
+          {% set raw_envoy = '__ENVOY_PV_ENTITY__' %}
+          {% set ENVOY_STALE_S = 20 * 60 %}
+          {% if not is_state('binary_sensor.emhass_envoy_required', 'on') %}
             false
           {% else %}
-            {% set raw_envoy = '__ENVOY_PV_ENTITY__' %}
             {% set raw = states[raw_envoy] %}
             {% set bad = ['unknown', 'unavailable', 'none', ''] %}
             {{ raw is none
                or states(raw_envoy) in bad
-               or (now() - raw.last_updated).total_seconds() > 20 * 60 }}
+               or (now() - raw.last_updated).total_seconds() > ENVOY_STALE_S }}
           {% endif %}
 
       - name: EMHASS fail house load inputs

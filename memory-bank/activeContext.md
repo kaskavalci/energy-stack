@@ -1,7 +1,41 @@
 # Active Context
 
-**Last updated:** 2026-08-23
+**Last updated:** 2026-08-30
 **Author:** Composer
+
+## EMHASS Envoy forecast gate — HA DEPLOYED; sunrise pending (2026-08-30)
+
+Branch `feature/emhass-envoy-forecast-gate` (Tasks 1–3 in working tree, **no
+commit**). Shared `binary_sensor.emhass_envoy_required` + consumer PV /
+house-load / C1 templates deployed to Odroid HA.
+
+| Item | Value |
+|------|-------|
+| Deploy time | 2026-08-30 ~22:52 CEST |
+| Backup | `/home/halil/homeassistant/config/backups/energy-stack-20260830-225238/` |
+| Config check | PASS (`hass --script check_config`); container restart clean |
+| Render | `emhass_envoy_required` + live Envoy `sensor.envoy_122043000054_current_power_production` |
+
+**Live smoke (night, elev ≈ −19°):** PASS
+
+- `binary_sensor.emhass_envoy_required` = `off`, `gate_reason=skip_night`
+- `sensor.emhass_house_load_sample_w` available; `sampled_at` advanced
+  (22:53 → 22:55 CEST)
+- `sensor.p_pv_forecast` = `0.00` W (current 30-minute plan step)
+- `binary_sensor.emhass_mpc_fresh` = `on` (`reason=ok`)
+
+**Sunrise acceptance:** **PENDING next dawn** (next_rising ≈ 2026-08-31
+04:49 UTC / ~06:50 CEST). Do not wait overnight.
+
+Checklist for next clear dawn:
+
+| Check | Pass criteria |
+|-------|----------------|
+| Through sunrise + 30 min while forecast &lt;150 or MPC not fresh | `gate_reason` in `skip_dawn_grace` / `skip_low_forecast` / `skip_mpc_stale`; house-load `sampled_at` keeps advancing; no MPC abort solely from Envoy silence |
+| After grace with forecast ≥150 and `emhass_mpc_fresh=on` | `gate_reason=require_fresh`; if Envoy still age&gt;20 min, PV/house-load unavailable and C1 on |
+| Missing `next_rising` | Not required live (covered by template tests) |
+
+Report: `.superpowers/sdd/task-4-report.md`
 
 ## HA Core 2026.8.3 — DEPLOYED (2026-08-23)
 

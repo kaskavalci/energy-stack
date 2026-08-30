@@ -244,6 +244,25 @@ class ThirtyMinuteEscalationRoutingTests(unittest.TestCase):
         self.assertNotIn("service: script.emhass_push_alert", block)
 
 
+class C1FailPvSensorGateTests(unittest.TestCase):
+    """C1 must consume shared envoy gate; no elevation heuristic."""
+
+    def test_c1_consumes_shared_envoy_gate_not_elevation(self) -> None:
+        text = monitoring_text()
+        marker = "unique_id: emhass_fail_pv_sensor\n"
+        self.assertIn(marker, text)
+        block = text.split(marker, 1)[1]
+        next_sensor = block.find("\n      - name:")
+        if next_sensor != -1:
+            block = block[:next_sensor]
+        self.assertIn("binary_sensor.emhass_envoy_required", block)
+        self.assertNotIn("elevation", block)
+        self.assertIn("binary_sensor.emhass_fail_pv_sensor", monitoring_text())
+        # Phone path still uses fail_pv_sensor escalate automations (no new alert id).
+        self.assertIn("emhass_escalate_C1_pv", text)
+        self.assertIn("emhass_notify_C1_pv", text)
+
+
 class AutomationIdentityTests(unittest.TestCase):
     def test_monitoring_automation_ids_are_unique(self) -> None:
         ids = re.findall(r"^  - id: (\S+)$", monitoring_text(), flags=re.M)
