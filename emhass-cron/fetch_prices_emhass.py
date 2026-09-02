@@ -239,7 +239,7 @@ def fetch_load_history_from_ha(
             {
                 "filter_entity_id": entity_id,
                 "end_time": end.isoformat(),
-                "no_attributes": "true",
+                "significant_changes_only": "0",
             }
         )
         url = (

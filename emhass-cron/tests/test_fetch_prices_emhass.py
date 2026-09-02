@@ -717,7 +717,10 @@ class FetchNativeLoadHistoryTests(unittest.TestCase):
             "state": "250",
             "last_changed": "2026-07-26T15:31:00+02:00",
             "last_updated": "2026-07-26T15:31:00+02:00",
-            "attributes": {},
+            "attributes": {
+                "sampled_at": "2026-07-26T15:31:00+02:00",
+                "load_quality": "valid",
+            },
         }
         mock_urlopen.return_value = self.response([[record]])
 
@@ -745,18 +748,49 @@ class FetchNativeLoadHistoryTests(unittest.TestCase):
             unquote(parsed.path),
             "/api/history/period/2026-07-26T14:30:00+02:00",
         )
+        query_params = parse_qs(parsed.query)
         self.assertEqual(
-            parse_qs(parsed.query),
+            query_params,
             {
                 "filter_entity_id": ["sensor.emhass_house_load_sample_w"],
                 "end_time": ["2026-07-26T15:34:00+02:00"],
-                "no_attributes": ["true"],
+                "significant_changes_only": ["0"],
             },
         )
+        self.assertNotIn("no_attributes", query_params)
         self.assertEqual(
             request.get_header("Authorization"),
             "Bearer history-token",
         )
+
+    @patch.object(fetch_prices_emhass, "urlopen")
+    def test_fetch_load_history_returns_consecutive_unchanged_samples(
+        self, mock_urlopen
+    ):
+        records = [
+            {
+                "entity_id": "sensor.emhass_house_load_sample_w",
+                "state": "0",
+                "last_changed": "2026-09-01T10:20:00+00:00",
+                "last_updated": f"2026-09-01T10:2{i}:00+00:00",
+                "attributes": {
+                    "sampled_at": f"2026-09-01T10:2{i}:00+00:00",
+                    "load_quality": "valid_noise_clamp",
+                },
+            }
+            for i in range(5)
+        ]
+        mock_urlopen.return_value = self.response([records])
+        with tempfile.TemporaryDirectory() as tmp:
+            secrets = Path(tmp) / "secrets.yaml"
+            secrets.write_text("hass_url: http://ha:8123\nlong_lived_token: tok\n", encoding="utf-8")
+            res = fetch_prices_emhass.fetch_load_history_from_ha(
+                secrets,
+                "sensor.emhass_house_load_sample_w",
+                start=datetime(2026, 9, 1, 10, 20, tzinfo=timezone.utc),
+                end=datetime(2026, 9, 1, 10, 25, tzinfo=timezone.utc),
+            )
+        self.assertEqual(len(res), 5)
 
     @patch.object(Path, "read_text", side_effect=PermissionError("denied"))
     @patch.object(Path, "is_file", return_value=True)
