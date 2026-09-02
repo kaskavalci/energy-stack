@@ -129,23 +129,18 @@ def extract_envoy_required_templates(
     reason = attrs["gate_reason"]
     if not isinstance(reason, str):
         raise AssertionError(f"{ENVOY_REQUIRED_ID} gate_reason must be a string")
-    # Global gate contract: Task 2 must keep is_number + mpc freshness in
-    # both state and reason; fail extract loudly if either is omitted.
+    # Global gate contract: Task 2 must keep is_number in both state and reason;
+    # Task 4 decouples envoy gate from mpc freshness (no emhass_mpc_fresh).
     for label, tmpl in (("state", state), ("gate_reason", reason)):
         if "is is_number" not in tmpl:
             raise AssertionError(
                 f"{ENVOY_REQUIRED_ID} {label} must use 'is is_number' "
                 "(HA forecast numeric gate)"
             )
-        if "binary_sensor.emhass_mpc_fresh" not in tmpl:
+        if "binary_sensor.emhass_mpc_fresh" in tmpl:
             raise AssertionError(
-                f"{ENVOY_REQUIRED_ID} {label} must reference "
+                f"{ENVOY_REQUIRED_ID} {label} must not reference "
                 "binary_sensor.emhass_mpc_fresh"
-            )
-        if "is_state('binary_sensor.emhass_mpc_fresh', 'on')" not in tmpl:
-            raise AssertionError(
-                f"{ENVOY_REQUIRED_ID} {label} must use "
-                "is_state('binary_sensor.emhass_mpc_fresh', 'on')"
             )
     return state, reason
 
@@ -197,7 +192,6 @@ def apply_gate_substitutes(
     next_rising_subst: str | None,
     now_ts: int,
     fc: str,
-    mpc_fresh: bool,
 ) -> str:
     """Apply mechanical substitutes; keep production as_timestamp(..., default=0)."""
     out = template
@@ -220,11 +214,6 @@ def apply_gate_substitutes(
         out,
         "states('sensor.p_pv_forecast')",
         f"'{fc}'",
-    )
-    out = substitute_once(
-        out,
-        "is_state('binary_sensor.emhass_mpc_fresh', 'on')",
-        "true" if mpc_fresh else "false",
     )
     return out
 
@@ -274,16 +263,15 @@ def force_p1_batt_inputs(
     return prefix + out
 
 
-# (name, sun_up, next_rising_subst, now_ts, fc, mpc_fresh, expect_reason, expect_on)
+# (name, sun_up, next_rising_subst, now_ts, fc, expect_reason, expect_on)
 # next_rising_subst: None means literal jinja `none`; str means quoted ISO for as_timestamp
-CASES: list[tuple[str, bool, str | None, int, str, bool, str, bool]] = [
+CASES: list[tuple[str, bool, str | None, int, str, str, bool]] = [
     (
         "night",
         False,
         "2026-08-30T04:00:00+00:00",
         1_000_000,
         "200",
-        True,
         "skip_night",
         False,
     ),
@@ -293,7 +281,6 @@ CASES: list[tuple[str, bool, str | None, int, str, bool, str, bool]] = [
         RISING_ISO,
         RISING_UNIX + 1799,
         "200",
-        True,
         "skip_dawn_grace",
         False,
     ),
@@ -303,7 +290,6 @@ CASES: list[tuple[str, bool, str | None, int, str, bool, str, bool]] = [
         RISING_ISO,
         RISING_UNIX + 1800,
         "200",
-        True,
         "skip_dawn_grace",
         False,
     ),
@@ -313,7 +299,6 @@ CASES: list[tuple[str, bool, str | None, int, str, bool, str, bool]] = [
         RISING_ISO,
         RISING_UNIX + 1801,
         "200",
-        True,
         "require_fresh",
         True,
     ),
@@ -323,7 +308,6 @@ CASES: list[tuple[str, bool, str | None, int, str, bool, str, bool]] = [
         RISING_ISO,
         RISING_UNIX + 2000,
         "149",
-        True,
         "skip_low_forecast",
         False,
     ),
@@ -333,7 +317,6 @@ CASES: list[tuple[str, bool, str | None, int, str, bool, str, bool]] = [
         RISING_ISO,
         RISING_UNIX + 2000,
         "150",
-        True,
         "require_fresh",
         True,
     ),
@@ -343,7 +326,6 @@ CASES: list[tuple[str, bool, str | None, int, str, bool, str, bool]] = [
         RISING_ISO,
         RISING_UNIX + 2000,
         "151",
-        True,
         "require_fresh",
         True,
     ),
@@ -353,7 +335,6 @@ CASES: list[tuple[str, bool, str | None, int, str, bool, str, bool]] = [
         RISING_ISO,
         RISING_UNIX + 2000,
         "unavailable",
-        True,
         "skip_forecast_unavailable",
         False,
     ),
@@ -363,7 +344,6 @@ CASES: list[tuple[str, bool, str | None, int, str, bool, str, bool]] = [
         RISING_ISO,
         RISING_UNIX + 2000,
         "nan",
-        True,
         "skip_forecast_unavailable",
         False,
     ),
@@ -373,7 +353,6 @@ CASES: list[tuple[str, bool, str | None, int, str, bool, str, bool]] = [
         RISING_ISO,
         RISING_UNIX + 2000,
         "inf",
-        True,
         "skip_forecast_unavailable",
         False,
     ),
@@ -383,18 +362,7 @@ CASES: list[tuple[str, bool, str | None, int, str, bool, str, bool]] = [
         RISING_ISO,
         RISING_UNIX + 2000,
         "-inf",
-        True,
         "skip_forecast_unavailable",
-        False,
-    ),
-    (
-        "mpc_stale",
-        True,
-        RISING_ISO,
-        RISING_UNIX + 2000,
-        "500",
-        False,
-        "skip_mpc_stale",
         False,
     ),
     (
@@ -403,7 +371,6 @@ CASES: list[tuple[str, bool, str | None, int, str, bool, str, bool]] = [
         None,
         RISING_UNIX + 2000,
         "500",
-        True,
         "skip_sunrise_unavailable",
         False,
     ),
@@ -413,7 +380,6 @@ CASES: list[tuple[str, bool, str | None, int, str, bool, str, bool]] = [
         _DST_SPRING_ISO,
         _DST_SPRING_LAST + 2000,
         "200",
-        True,
         "require_fresh",
         True,
     ),
@@ -423,7 +389,6 @@ CASES: list[tuple[str, bool, str | None, int, str, bool, str, bool]] = [
         _DST_FALL_ISO,
         _DST_FALL_LAST + 2000,
         "200",
-        True,
         "require_fresh",
         True,
     ),
@@ -450,16 +415,17 @@ class EmhassEnvoyGateTemplateTests(unittest.TestCase):
         # still fails this structural test loudly.
         self.assertIn("is is_number", state_j2)
         self.assertIn("is is_number", reason_j2)
-        self.assertIn("binary_sensor.emhass_mpc_fresh", state_j2)
-        self.assertIn("binary_sensor.emhass_mpc_fresh", reason_j2)
-        self.assertIn(
+        self.assertNotIn("binary_sensor.emhass_mpc_fresh", state_j2)
+        self.assertNotIn("binary_sensor.emhass_mpc_fresh", reason_j2)
+        self.assertNotIn(
             "is_state('binary_sensor.emhass_mpc_fresh', 'on')",
             state_j2,
         )
-        self.assertIn(
+        self.assertNotIn(
             "is_state('binary_sensor.emhass_mpc_fresh', 'on')",
             reason_j2,
         )
+        self.assertNotIn("skip_mpc_stale", reason_j2)
         self.assertIn("skip_night", reason_j2)
         self.assertIn("require_fresh", reason_j2)
 
@@ -470,7 +436,6 @@ class EmhassEnvoyGateTemplateTests(unittest.TestCase):
             next_rising_subst=None,
             now_ts=RISING_UNIX + 2000,
             fc="500",
-            mpc_fresh=True,
         )
         reason = eval_ha_template(apply_gate_substitutes(reason_j2, **kwargs))
         state = eval_ha_template(apply_gate_substitutes(state_j2, **kwargs))
@@ -486,7 +451,6 @@ class EmhassEnvoyGateTemplateTests(unittest.TestCase):
             next_rising_subst,
             now_ts,
             fc,
-            mpc_fresh,
             expect_reason,
             expect_on,
         ) in CASES:
@@ -496,7 +460,6 @@ class EmhassEnvoyGateTemplateTests(unittest.TestCase):
                     next_rising_subst=next_rising_subst,
                     now_ts=now_ts,
                     fc=fc,
-                    mpc_fresh=mpc_fresh,
                 )
                 reason = eval_ha_template(
                     apply_gate_substitutes(reason_j2, **kwargs)
@@ -517,6 +480,21 @@ class EmhassEnvoyGateTemplateTests(unittest.TestCase):
                         ("false", "off", "0", ""),
                         f"{name}: expected off, got {state!r}",
                     )
+
+    def test_envoy_required_when_sun_up_grace_elapsed_and_forecast_material_even_if_mpc_stale(
+        self,
+    ) -> None:
+        state_j2, reason_j2 = self._templates()
+        kwargs = dict(
+            sun_up=True,
+            next_rising_subst=RISING_ISO,
+            now_ts=RISING_UNIX + 2000,
+            fc="200",
+        )
+        reason = eval_ha_template(apply_gate_substitutes(reason_j2, **kwargs))
+        state = eval_ha_template(apply_gate_substitutes(state_j2, **kwargs))
+        self.assertEqual(reason, "require_fresh")
+        self.assertIn(state.lower(), ("true", "on", "1"))
 
 
 class EmhassEnvoyConsumerTemplateTests(unittest.TestCase):

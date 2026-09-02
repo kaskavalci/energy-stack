@@ -291,16 +291,17 @@ class EmhassLoadSampleSensorTests(unittest.TestCase):
         self.assertIn("states('sensor.p_pv_forecast')", state)
         self.assertIn("is is_number", state)
         self.assertIn("is is_number", reason)
-        self.assertIn("binary_sensor.emhass_mpc_fresh", state)
-        self.assertIn("binary_sensor.emhass_mpc_fresh", reason)
-        self.assertIn(
+        self.assertNotIn("binary_sensor.emhass_mpc_fresh", state)
+        self.assertNotIn("binary_sensor.emhass_mpc_fresh", reason)
+        self.assertNotIn(
             "is_state('binary_sensor.emhass_mpc_fresh', 'on')",
             state,
         )
-        self.assertIn(
+        self.assertNotIn(
             "is_state('binary_sensor.emhass_mpc_fresh', 'on')",
             reason,
         )
+        self.assertNotIn("skip_mpc_stale", reason)
 
     def test_pv_sensor_consumes_shared_envoy_gate(self) -> None:
         sensor = self.pv_sensor()

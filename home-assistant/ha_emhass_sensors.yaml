@@ -22,8 +22,7 @@ template:
           {% set forecast_material =
                fc is is_number
                and (fc | float(0)) >= ENVOY_MATERIAL_FORECAST_W %}
-          {% set mpc_fresh = is_state('binary_sensor.emhass_mpc_fresh', 'on') %}
-          {{ sun_up and dawn_grace_elapsed and forecast_material and mpc_fresh }}
+          {{ sun_up and dawn_grace_elapsed and forecast_material }}
         attributes:
           gate_reason: >
             {% set ENVOY_DAWN_GRACE_S = 30 * 60 %}
@@ -37,7 +36,6 @@ template:
             {% set forecast_ok = fc is is_number %}
             {% set forecast_material =
                  forecast_ok and (fc | float(0)) >= ENVOY_MATERIAL_FORECAST_W %}
-            {% set mpc_fresh = is_state('binary_sensor.emhass_mpc_fresh', 'on') %}
             {% if not sun_up %}
               skip_night
             {% elif rising_ts <= 0 %}
@@ -48,8 +46,6 @@ template:
               skip_forecast_unavailable
             {% elif not forecast_material %}
               skip_low_forecast
-            {% elif not mpc_fresh %}
-              skip_mpc_stale
             {% else %}
               require_fresh
             {% endif %}
