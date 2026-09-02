@@ -93,6 +93,174 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
             if index not in missing_indices
         ]
 
+    def test_repeated_zero_with_fresh_sampled_at_is_healthy(self):
+        now = datetime(2026, 9, 1, 10, 30, tzinfo=timezone.utc)
+        records = []
+        for i in range(32):
+            bin_time = now - timedelta(minutes=30 * (31 - i))
+            records.append({
+                "entity_id": "sensor.emhass_house_load_sample_w",
+                "state": "0",
+                "last_changed": "2026-09-01T00:00:00+00:00",
+                "last_updated": bin_time.isoformat(),
+                "attributes": {
+                    "sampled_at": bin_time.isoformat(),
+                    "load_quality": "valid_noise_clamp",
+                },
+            })
+        summary = fetch_prices_emhass.validate_load_history_records(
+            records, prediction_horizon=32, step_min=30, now=now
+        )
+        self.assertEqual(summary["mode"], "healthy")
+        self.assertEqual(summary["covered_bins"], 32)
+        self.assertEqual(summary["quality"], "valid_noise_clamp")
+
+    def test_held_estimate_within_300s_is_usable(self):
+        now = datetime(2026, 9, 1, 10, 30, tzinfo=timezone.utc)
+        records = [
+            {
+                "entity_id": "sensor.emhass_house_load_sample_w",
+                "state": "500",
+                "last_changed": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
+                "last_updated": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
+                "attributes": {
+                    "sampled_at": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
+                    "load_quality": "valid" if i < 31 else "held_estimate",
+                    "hold_age_s": 120 if i == 31 else 0,
+                    "estimate_reason": "envoy_update_lag" if i == 31 else None,
+                },
+            }
+            for i in range(32)
+        ]
+        summary = fetch_prices_emhass.validate_load_history_records(
+            records, prediction_horizon=32, step_min=30, now=now
+        )
+        self.assertEqual(summary["mode"], "healthy")  # all 32 bins covered!
+        self.assertEqual(summary["quality"], "held_estimate")
+        self.assertEqual(summary["quality_reason"], "envoy_update_lag")
+
+    def test_held_estimate_exceeding_300s_is_reclassified_as_invalid(self):
+        now = datetime(2026, 9, 1, 10, 30, tzinfo=timezone.utc)
+        records = [
+            {
+                "entity_id": "sensor.emhass_house_load_sample_w",
+                "state": "500",
+                "last_changed": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
+                "last_updated": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
+                "attributes": {
+                    "sampled_at": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
+                    "load_quality": "valid" if i < 31 else "held_estimate",
+                    "hold_age_s": 301 if i == 31 else 0,
+                },
+            }
+            for i in range(32)
+        ]
+        with self.assertRaises(fetch_prices_emhass.LoadHistoryError) as ctx:
+            fetch_prices_emhass.validate_load_history_records(
+                records, prediction_horizon=32, step_min=30, now=now
+            )
+        self.assertIn("hold_expired", str(ctx.exception))
+        self.assertEqual(ctx.exception.summary["quality"], "invalid")
+
+    def test_invalid_newest_sample_reports_quality_error_not_stale(self):
+        now = datetime(2026, 9, 1, 10, 30, tzinfo=timezone.utc)
+        records = [
+            {
+                "entity_id": "sensor.emhass_house_load_sample_w",
+                "state": "500",
+                "last_changed": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
+                "last_updated": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
+                "attributes": {
+                    "sampled_at": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
+                    "load_quality": "valid",
+                },
+            }
+            for i in range(31)
+        ]
+        # At now - 1 min (fresh!), sample is marked invalid
+        records.append({
+            "entity_id": "sensor.emhass_house_load_sample_w",
+            "state": "500",
+            "last_changed": (now - timedelta(minutes=1)).isoformat(),
+            "last_updated": (now - timedelta(minutes=1)).isoformat(),
+            "attributes": {
+                "sampled_at": (now - timedelta(minutes=1)).isoformat(),
+                "load_quality": "invalid",
+                "invalid_reason": "hold_expired",
+            },
+        })
+        with self.assertRaises(fetch_prices_emhass.LoadHistoryError) as ctx:
+            fetch_prices_emhass.validate_load_history_records(
+                records, prediction_horizon=32, step_min=30, now=now
+            )
+        self.assertIn("hold_expired", str(ctx.exception))
+        self.assertNotIn("is stale", str(ctx.exception))
+
+    def test_missing_sampled_at_falls_back_to_last_updated(self):
+        now = datetime(2026, 9, 1, 10, 30, tzinfo=timezone.utc)
+        records = [
+            {
+                "entity_id": "sensor.emhass_house_load_sample_w",
+                "state": "500",
+                "last_changed": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
+                "last_updated": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
+                "attributes": {},
+            }
+            for i in range(32)
+        ]
+        summary = fetch_prices_emhass.validate_load_history_records(
+            records, prediction_horizon=32, step_min=30, now=now
+        )
+        self.assertEqual(summary["mode"], "healthy")
+        self.assertEqual(summary["covered_bins"], 32)
+        self.assertEqual(summary["quality"], "valid")
+
+    def test_mixed_valid_and_noise_clamp_quality_reports_noise_clamp(self):
+        now = datetime(2026, 9, 1, 10, 30, tzinfo=timezone.utc)
+        records = [
+            {
+                "entity_id": "sensor.emhass_house_load_sample_w",
+                "state": "0" if i == 5 else "500",
+                "last_changed": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
+                "last_updated": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
+                "attributes": {
+                    "sampled_at": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
+                    "load_quality": "valid_noise_clamp" if i == 5 else "valid",
+                },
+            }
+            for i in range(32)
+        ]
+        summary = fetch_prices_emhass.validate_load_history_records(
+            records, prediction_horizon=32, step_min=30, now=now
+        )
+        self.assertEqual(summary["mode"], "healthy")
+        self.assertEqual(summary["quality"], "valid_noise_clamp")
+        self.assertEqual(summary["quality_counts"]["valid_noise_clamp"], 1)
+        self.assertEqual(summary["quality_counts"]["valid"], 31)
+
+    def test_all_invalid_samples_fails_closed(self):
+        now = datetime(2026, 9, 1, 10, 30, tzinfo=timezone.utc)
+        records = [
+            {
+                "entity_id": "sensor.emhass_house_load_sample_w",
+                "state": "0",
+                "last_changed": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
+                "last_updated": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
+                "attributes": {
+                    "sampled_at": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
+                    "load_quality": "invalid",
+                    "invalid_reason": "source_stale",
+                },
+            }
+            for i in range(32)
+        ]
+        with self.assertRaises(fetch_prices_emhass.LoadHistoryError) as ctx:
+            fetch_prices_emhass.validate_load_history_records(
+                records, prediction_horizon=32, step_min=30, now=now
+            )
+        self.assertIn("source_stale", str(ctx.exception))
+        self.assertEqual(ctx.exception.summary["quality"], "invalid")
+
     def test_complete_history_is_healthy(self):
         summary = fetch_prices_emhass.validate_load_history_records(
             self.records_with_missing_bins(horizon=32, missing_indices=set()),
@@ -250,6 +418,14 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
                 "interpolation_method": None,
                 "newest_sample_at": "2026-07-26T13:32:00+00:00",
                 "newest_sample_age_minutes": 2.0,
+                "quality": "valid",
+                "quality_counts": {
+                    "valid": 3,
+                    "valid_noise_clamp": 0,
+                    "held_estimate": 0,
+                    "invalid": 0,
+                },
+                "quality_reason": None,
             },
         )
 
@@ -408,6 +584,14 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
                 "interpolation_method": None,
                 "newest_sample_at": "2026-10-25T00:31:00+00:00",
                 "newest_sample_age_minutes": 3.0,
+                "quality": "valid",
+                "quality_counts": {
+                    "valid": 1,
+                    "valid_noise_clamp": 0,
+                    "held_estimate": 0,
+                    "invalid": 0,
+                },
+                "quality_reason": None,
             },
         )
 
@@ -468,6 +652,14 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
                 "interpolation_method": None,
                 "newest_sample_at": "2026-10-25T01:31:00+00:00",
                 "newest_sample_age_minutes": 3.0,
+                "quality": "valid",
+                "quality_counts": {
+                    "valid": 4,
+                    "valid_noise_clamp": 0,
+                    "held_estimate": 0,
+                    "invalid": 0,
+                },
+                "quality_reason": None,
             },
         )
 
@@ -561,6 +753,14 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
                 "interpolation_method": None,
                 "newest_sample_at": "2026-03-29T01:31:00+00:00",
                 "newest_sample_age_minutes": 3.0,
+                "quality": "valid",
+                "quality_counts": {
+                    "valid": 32,
+                    "valid_noise_clamp": 0,
+                    "held_estimate": 0,
+                    "invalid": 0,
+                },
+                "quality_reason": None,
             },
         )
 

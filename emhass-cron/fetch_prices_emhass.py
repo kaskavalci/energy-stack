@@ -97,6 +97,26 @@ LOAD_HISTORY_MODE_HEALTHY = "healthy"
 LOAD_HISTORY_MODE_DEGRADED = "degraded"
 LOAD_HISTORY_MODE_UNSAFE = "unsafe"
 
+LOAD_QUALITY_VALID = "valid"
+LOAD_QUALITY_VALID_NOISE_CLAMP = "valid_noise_clamp"
+LOAD_QUALITY_HELD_ESTIMATE = "held_estimate"
+LOAD_QUALITY_INVALID = "invalid"
+USABLE_LOAD_QUALITIES = (
+    LOAD_QUALITY_VALID,
+    LOAD_QUALITY_VALID_NOISE_CLAMP,
+    LOAD_QUALITY_HELD_ESTIMATE,
+)
+MAX_HELD_LOAD_AGE_S = 300
+
+
+@dataclass
+class LoadHistorySample:
+    value: float
+    timestamp_utc: datetime
+    quality: str
+    reason: str | None = None
+    hold_age_s: float | None = None
+
 
 class LoadHistoryError(RuntimeError):
     """Expected load-history config, retrieval, or validation failure."""
@@ -283,6 +303,93 @@ def fetch_load_history_from_ha(
     return records
 
 
+def _parse_load_history_record(
+    record: dict[str, Any],
+    *,
+    now_utc: datetime,
+) -> LoadHistorySample | None:
+    try:
+        value = float(record.get("state", "nan"))
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(value) or value < 0:
+        return None
+
+    attrs = record.get("attributes")
+    if not isinstance(attrs, dict):
+        attrs = {}
+
+    raw_timestamp = (
+        attrs.get("sampled_at")
+        or record.get("last_updated")
+        or record.get("last_changed")
+    )
+    if raw_timestamp is None:
+        return None
+    timestamp_text = str(raw_timestamp).strip()
+    try:
+        if timestamp_text.endswith("Z"):
+            timestamp = datetime.fromisoformat(
+                timestamp_text.replace("Z", "+00:00")
+            )
+        else:
+            timestamp = datetime.fromisoformat(timestamp_text)
+    except ValueError:
+        return None
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        return None
+    timestamp_utc = timestamp.astimezone(timezone.utc)
+    if timestamp_utc > now_utc:
+        return None
+
+    raw_quality = attrs.get("load_quality")
+    if raw_quality is None:
+        quality = LOAD_QUALITY_VALID
+    else:
+        quality = str(raw_quality).strip()
+
+    raw_hold_age = attrs.get("hold_age_s")
+    hold_age_s: float | None = None
+    if raw_hold_age is not None:
+        try:
+            hold_age_s = float(raw_hold_age)
+        except (TypeError, ValueError):
+            hold_age_s = None
+
+    raw_reason = (
+        attrs.get("invalid_reason")
+        or attrs.get("estimate_reason")
+        or attrs.get("reason")
+    )
+    reason = str(raw_reason).strip() if raw_reason is not None else None
+
+    if quality == LOAD_QUALITY_HELD_ESTIMATE:
+        if hold_age_s is None or hold_age_s < 0 or hold_age_s > MAX_HELD_LOAD_AGE_S:
+            quality = LOAD_QUALITY_INVALID
+            if not reason:
+                reason = (
+                    "hold_expired"
+                    if (hold_age_s is not None and hold_age_s > MAX_HELD_LOAD_AGE_S)
+                    else "invalid_hold_age"
+                )
+    elif quality not in (
+        LOAD_QUALITY_VALID,
+        LOAD_QUALITY_VALID_NOISE_CLAMP,
+        LOAD_QUALITY_INVALID,
+    ):
+        quality = LOAD_QUALITY_INVALID
+        if not reason:
+            reason = "unknown_quality"
+
+    return LoadHistorySample(
+        value=value,
+        timestamp_utc=timestamp_utc,
+        quality=quality,
+        reason=reason,
+        hold_age_s=hold_age_s,
+    )
+
+
 def validate_load_history_records(
     records: list[dict[str, Any]],
     *,
@@ -305,49 +412,99 @@ def validate_load_history_records(
 
     local_tz = now.tzinfo
     now_utc = now.astimezone(timezone.utc)
-    finite_samples_utc: list[datetime] = []
+    parsed_samples: list[LoadHistorySample] = []
     for record in records:
-        try:
-            value = float(record.get("state", "nan"))
-        except (TypeError, ValueError):
+        if not isinstance(record, dict):
             continue
-        if not math.isfinite(value) or value < 0:
-            continue
+        sample = _parse_load_history_record(record, now_utc=now_utc)
+        if sample is not None:
+            parsed_samples.append(sample)
 
-        raw_timestamp = record.get("last_updated") or record.get("last_changed")
-        if raw_timestamp is None:
-            continue
-        timestamp_text = str(raw_timestamp).strip()
-        try:
-            if timestamp_text.endswith("Z"):
-                timestamp = datetime.fromisoformat(
-                    timestamp_text.replace("Z", "+00:00")
-                )
-            else:
-                timestamp = datetime.fromisoformat(timestamp_text)
-        except ValueError:
-            continue
-        if timestamp.tzinfo is None or timestamp.utcoffset() is None:
-            continue
-        timestamp_utc = timestamp.astimezone(timezone.utc)
-        if timestamp_utc > now_utc:
-            continue
-        finite_samples_utc.append(timestamp_utc)
-
-    if not finite_samples_utc:
+    if not parsed_samples:
         raise LoadHistoryError("Load history has no finite nonnegative samples")
 
-    newest_utc = max(finite_samples_utc)
+    parsed_samples.sort(key=lambda s: s.timestamp_utc)
+    newest_sample = parsed_samples[-1]
+    newest_utc = newest_sample.timestamp_utc
     newest_age_min = (now_utc - newest_utc).total_seconds() / 60.0
 
-    newest_bin_utc = floor_to_step(newest_utc, step_min)
+    if newest_age_min <= 5.0 and newest_sample.quality == LOAD_QUALITY_INVALID:
+        summary = {
+            "mode": LOAD_HISTORY_MODE_UNSAFE,
+            "required_bins": prediction_horizon,
+            "covered_bins": 0,
+            "missing_bin_count": prediction_horizon,
+            "missing_bins": [],
+            "interpolation_method": None,
+            "newest_sample_at": newest_utc.isoformat(),
+            "newest_sample_age_minutes": round(newest_age_min, 1),
+            "quality": LOAD_QUALITY_INVALID,
+            "quality_counts": {
+                LOAD_QUALITY_VALID: sum(
+                    1 for s in parsed_samples if s.quality == LOAD_QUALITY_VALID
+                ),
+                LOAD_QUALITY_VALID_NOISE_CLAMP: sum(
+                    1
+                    for s in parsed_samples
+                    if s.quality == LOAD_QUALITY_VALID_NOISE_CLAMP
+                ),
+                LOAD_QUALITY_HELD_ESTIMATE: sum(
+                    1
+                    for s in parsed_samples
+                    if s.quality == LOAD_QUALITY_HELD_ESTIMATE
+                ),
+                LOAD_QUALITY_INVALID: sum(
+                    1 for s in parsed_samples if s.quality == LOAD_QUALITY_INVALID
+                ),
+            },
+            "quality_reason": newest_sample.reason,
+        }
+        raise LoadHistoryError(
+            f"Load history sample invalid: {newest_sample.reason or 'unknown'}",
+            summary=summary,
+        )
+
+    usable_samples = [
+        s for s in parsed_samples if s.quality in USABLE_LOAD_QUALITIES
+    ]
+    if not usable_samples:
+        summary = {
+            "mode": LOAD_HISTORY_MODE_UNSAFE,
+            "required_bins": prediction_horizon,
+            "covered_bins": 0,
+            "missing_bin_count": prediction_horizon,
+            "missing_bins": [],
+            "interpolation_method": None,
+            "newest_sample_at": newest_utc.isoformat(),
+            "newest_sample_age_minutes": round(newest_age_min, 1),
+            "quality": LOAD_QUALITY_INVALID,
+            "quality_counts": {
+                LOAD_QUALITY_VALID: 0,
+                LOAD_QUALITY_VALID_NOISE_CLAMP: 0,
+                LOAD_QUALITY_HELD_ESTIMATE: 0,
+                LOAD_QUALITY_INVALID: len(parsed_samples),
+            },
+            "quality_reason": newest_sample.reason,
+        }
+        raise LoadHistoryError(
+            f"Load history sample invalid: {newest_sample.reason or 'no usable samples'}",
+            summary=summary,
+        )
+
+    newest_usable = usable_samples[-1]
+    newest_usable_utc = newest_usable.timestamp_utc
+    newest_usable_age_min = (
+        now_utc - newest_usable_utc
+    ).total_seconds() / 60.0
+
+    newest_bin_utc = floor_to_step(newest_usable_utc, step_min)
     first_required_bin_utc = newest_bin_utc - timedelta(
         minutes=step_min * (prediction_horizon - 1)
     )
     covered_bins_utc = {
-        floor_to_step(timestamp_utc, step_min)
-        for timestamp_utc in finite_samples_utc
-        if first_required_bin_utc <= timestamp_utc <= now_utc
+        floor_to_step(s.timestamp_utc, step_min)
+        for s in usable_samples
+        if first_required_bin_utc <= s.timestamp_utc <= now_utc
     }
     required_bins_utc = [
         first_required_bin_utc + timedelta(minutes=step_min * index)
@@ -355,6 +512,48 @@ def validate_load_history_records(
     ]
     required_set_utc = set(required_bins_utc)
     missing_bins_utc = sorted(required_set_utc - covered_bins_utc)
+
+    window_samples = [
+        s
+        for s in usable_samples
+        if first_required_bin_utc <= s.timestamp_utc <= now_utc
+    ]
+    if not window_samples:
+        window_samples = usable_samples
+
+    if any(s.quality == LOAD_QUALITY_HELD_ESTIMATE for s in window_samples):
+        overall_quality = LOAD_QUALITY_HELD_ESTIMATE
+    elif any(
+        s.quality == LOAD_QUALITY_VALID_NOISE_CLAMP for s in window_samples
+    ):
+        overall_quality = LOAD_QUALITY_VALID_NOISE_CLAMP
+    else:
+        overall_quality = LOAD_QUALITY_VALID
+
+    quality_counts = {
+        LOAD_QUALITY_VALID: sum(
+            1 for s in window_samples if s.quality == LOAD_QUALITY_VALID
+        ),
+        LOAD_QUALITY_VALID_NOISE_CLAMP: sum(
+            1
+            for s in window_samples
+            if s.quality == LOAD_QUALITY_VALID_NOISE_CLAMP
+        ),
+        LOAD_QUALITY_HELD_ESTIMATE: sum(
+            1
+            for s in window_samples
+            if s.quality == LOAD_QUALITY_HELD_ESTIMATE
+        ),
+        LOAD_QUALITY_INVALID: 0,
+    }
+
+    samples_with_reason = [
+        s for s in reversed(window_samples) if s.reason is not None
+    ]
+    quality_reason = (
+        samples_with_reason[0].reason if samples_with_reason else None
+    )
+
     summary: dict[str, Any] = {
         "mode": LOAD_HISTORY_MODE_HEALTHY,
         "required_bins": prediction_horizon,
@@ -362,14 +561,17 @@ def validate_load_history_records(
         "missing_bin_count": len(missing_bins_utc),
         "missing_bins": [value.isoformat() for value in missing_bins_utc],
         "interpolation_method": None,
-        "newest_sample_at": newest_utc.isoformat(),
-        "newest_sample_age_minutes": round(newest_age_min, 1),
+        "newest_sample_at": newest_usable_utc.isoformat(),
+        "newest_sample_age_minutes": round(newest_usable_age_min, 1),
+        "quality": overall_quality,
+        "quality_counts": quality_counts,
+        "quality_reason": quality_reason,
     }
-    if newest_age_min > 5:
+    if newest_usable_age_min > 5:
         summary["mode"] = LOAD_HISTORY_MODE_UNSAFE
         raise LoadHistoryError(
             f"Load history newest finite sample is stale "
-            f"({newest_age_min:.1f} minutes old; maximum 5)",
+            f"({newest_usable_age_min:.1f} minutes old; maximum 5)",
             summary=summary,
         )
     if not missing_bins_utc:
@@ -1269,6 +1471,14 @@ def _abort_mpc_load_history(
             "interpolation_method": None,
             "newest_sample_at": None,
             "newest_sample_age_minutes": None,
+            "quality": LOAD_QUALITY_INVALID,
+            "quality_counts": {
+                LOAD_QUALITY_VALID: 0,
+                LOAD_QUALITY_VALID_NOISE_CLAMP: 0,
+                LOAD_QUALITY_HELD_ESTIMATE: 0,
+                LOAD_QUALITY_INVALID: 0,
+            },
+            "quality_reason": None,
         }
     write_run_status(
         share_dir,
