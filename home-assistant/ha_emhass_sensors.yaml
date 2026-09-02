@@ -54,6 +54,18 @@ template:
               require_fresh
             {% endif %}
 
+      - name: EMHASS house load valid
+        unique_id: emhass_house_load_valid
+        default_entity_id: binary_sensor.emhass_house_load_valid
+        device_class: safety
+        state: >
+          {{ state_attr('sensor.emhass_house_load_sample_w', 'load_quality') in ['valid', 'valid_noise_clamp', 'held_estimate'] }}
+        attributes:
+          quality: "{{ state_attr('sensor.emhass_house_load_sample_w', 'load_quality') }}"
+          reason: "{{ state_attr('sensor.emhass_house_load_sample_w', 'invalid_reason') or state_attr('sensor.emhass_house_load_sample_w', 'estimate_reason') }}"
+          sampled_at: "{{ state_attr('sensor.emhass_house_load_sample_w', 'sampled_at') }}"
+          hold_age_s: "{{ state_attr('sensor.emhass_house_load_sample_w', 'hold_age_s') }}"
+
   - sensor:
       - name: EMHASS PV power
         unique_id: emhass_pv_power_w
@@ -95,18 +107,14 @@ template:
         state_class: measurement
         state: >
           {% set raw_envoy = '__ENVOY_PV_ENTITY__' %}
-          {% set ENVOY_STALE_S = 20 * 60 %}
           {% set required = is_state('binary_sensor.emhass_envoy_required', 'on') %}
-          {% set raw = states[raw_envoy] %}
+          {% set raw_e = states[raw_envoy] %}
           {% set bad = ['unknown', 'unavailable', 'none', ''] %}
           {% set envoy_bad = states(raw_envoy) in bad %}
-          {% set envoy_stale = raw is none
-             or (now() - raw.last_updated).total_seconds() > ENVOY_STALE_S %}
-          {% set raw_pv_w = states(raw_envoy) | float(0) * 1000 %}
-          {% set pv = 0 if ((not required) and (envoy_stale or envoy_bad)) else raw_pv_w %}
+          {% set pv = 0 if ((not required) and envoy_bad) else (states(raw_envoy) | float(0) * 1000) %}
           {% set grid = states('__P1_POWER_NET_ENTITY__') | float(0) %}
           {% set batt = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_power') | float(0) %}
-          {{ [grid + pv - batt, 0] | max | round(0) }}
+          {{ (grid + pv - batt) | round(0) }}
         availability: >
           {% set stale_after_s = 20 * 60 %}
           {% set bad = ['unknown', 'unavailable', 'none', ''] %}
@@ -136,6 +144,52 @@ template:
   - trigger:
       - platform: time_pattern
         seconds: "0"
+    variables:
+      p1_entity: '__P1_POWER_NET_ENTITY__'
+      batt_entity: 'sensor.__SIGEN_PLANT_SLUG___plant_battery_power'
+      envoy_entity: '__ENVOY_PV_ENTITY__'
+      envoy_req: "{{ is_state('binary_sensor.emhass_envoy_required', 'on') }}"
+      p1_state: "{{ states[p1_entity] }}"
+      batt_state: "{{ states[batt_entity] }}"
+      envoy_state: "{{ states[envoy_entity] }}"
+      bad: "{{ ['unknown', 'unavailable', 'none', ''] }}"
+      p1_bad: "{{ p1_state is none or p1_state.state in bad }}"
+      batt_bad: "{{ batt_state is none or batt_state.state in bad }}"
+      envoy_bad: "{{ envoy_state is none or envoy_state.state in bad }}"
+      now_ts: "{{ as_timestamp(now()) }}"
+      p1_age: "{{ (now_ts - as_timestamp(p1_state.last_reported, default=0)) if (p1_state is not none and p1_state.last_reported is defined) else 9999 }}"
+      batt_age: "{{ (now_ts - as_timestamp(batt_state.last_reported, default=0)) if (batt_state is not none and batt_state.last_reported is defined) else 9999 }}"
+      envoy_report_age: "{{ (now_ts - as_timestamp(envoy_state.last_reported, default=0)) if (envoy_state is not none and envoy_state.last_reported is defined) else 9999 }}"
+      envoy_value_age: "{{ (now_ts - as_timestamp(envoy_state.last_updated, default=0)) if (envoy_state is not none and envoy_state.last_updated is defined) else 9999 }}"
+      sources_stale: >
+        {{ p1_bad or batt_bad or p1_age > 180 or batt_age > 180 or (envoy_req and (envoy_bad or envoy_report_age > 180)) }}
+      source_spread: >
+        {% if envoy_req %}
+          {{ [p1_age, batt_age, envoy_report_age] | max - [p1_age, batt_age, envoy_report_age] | min }}
+        {% else %}
+          {{ [p1_age, batt_age] | max - [p1_age, batt_age] | min }}
+        {% endif %}
+      grid_w: "{{ states(p1_entity) | float(0) }}"
+      batt_w: "{{ states(batt_entity) | float(0) }}"
+      pv_w: "{{ 0 if ((not envoy_req) and envoy_bad) else (states(envoy_entity) | float(0) * 1000) }}"
+      raw_bal: "{{ grid_w + pv_w - batt_w }}"
+      prev_valid_ts: >
+        {{ as_timestamp(this.attributes.last_valid_at, default=0) if (this is defined and this.attributes is defined and this.attributes.last_valid_at is defined) else 0 }}
+      prev_valid_w: >
+        {{ this.attributes.last_valid_w | float(none) if (this is defined and this.attributes is defined and this.attributes.last_valid_w is defined) else none }}
+      hold_age: "{{ (now_ts - prev_valid_ts) if prev_valid_ts > 0 else 9999 }}"
+      quality_and_val: >
+        {% if sources_stale or source_spread > 180 %}
+          {{ ('invalid', 'source_stale_or_spread', (prev_valid_w if prev_valid_w is not none else 0)) }}
+        {% elif raw_bal >= 0 %}
+          {{ ('valid', 'none', raw_bal | round(0)) }}
+        {% elif raw_bal >= -200 %}
+          {{ ('valid_noise_clamp', 'none', 0) }}
+        {% elif prev_valid_w is not none and hold_age <= 300 %}
+          {{ ('held_estimate', 'envoy_update_lag', prev_valid_w) }}
+        {% else %}
+          {{ ('invalid', 'hold_expired' if prev_valid_w is not none else 'no_prior_valid', (prev_valid_w if prev_valid_w is not none else 0)) }}
+        {% endif %}
     sensor:
       - name: EMHASS house load sample
         unique_id: emhass_house_load_sample_w
@@ -143,11 +197,18 @@ template:
         unit_of_measurement: W
         device_class: power
         state_class: measurement
-        state: >
-          {{ states('sensor.emhass_house_load_power_w') | float(0) | round(0) }}
-        availability: >
-          {% set value = states('sensor.emhass_house_load_power_w') %}
-          {{ value not in ['unknown', 'unavailable', 'none', '']
-             and (value | float(none)) is not none }}
+        state: "{{ quality_and_val[2] }}"
         attributes:
           sampled_at: "{{ now().isoformat() }}"
+          load_quality: "{{ quality_and_val[0] }}"
+          invalid_reason: "{{ quality_and_val[1] if quality_and_val[0] == 'invalid' else none }}"
+          estimate_reason: "{{ quality_and_val[1] if quality_and_val[0] == 'held_estimate' else none }}"
+          raw_balance_w: "{{ raw_bal | round(0) }}"
+          last_valid_at: "{{ now().isoformat() if quality_and_val[0] in ['valid', 'valid_noise_clamp'] else (this.attributes.last_valid_at if (this is defined and this.attributes is defined and this.attributes.last_valid_at is defined) else none) }}"
+          last_valid_w: "{{ raw_bal | round(0) if quality_and_val[0] == 'valid' else (0 if quality_and_val[0] == 'valid_noise_clamp' else prev_valid_w) }}"
+          hold_age_s: "{{ hold_age if quality_and_val[0] == 'held_estimate' else 0 }}"
+          source_spread_s: "{{ source_spread | round(1) }}"
+          envoy_value_age_s: "{{ envoy_value_age | round(1) }}"
+          grid_w: "{{ grid_w | round(0) }}"
+          pv_w: "{{ pv_w | round(0) }}"
+          battery_w: "{{ batt_w | round(0) }}"

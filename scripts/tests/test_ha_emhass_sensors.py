@@ -21,6 +21,9 @@ C1_FAIL_PV_ID = "binary_sensor.emhass_fail_pv_sensor"
 LEGACY_ENVOY_GATE = "sun_up or raw_pv_w > 50"
 
 
+HOUSE_LOAD_VALID_ID = "binary_sensor.emhass_house_load_valid"
+
+
 def load_package(path: Path = PACKAGE) -> Mapping[str, Any]:
     with path.open(encoding="utf-8") as stream:
         document = YAML(typ="safe").load(stream)
@@ -93,6 +96,15 @@ class EmhassLoadSampleSensorTests(unittest.TestCase):
         )
         return matches[0][1]
 
+    def house_load_valid_sensor(self) -> Mapping[str, Any]:
+        matches = self._find_sensors(HOUSE_LOAD_VALID_ID, kind="binary_sensor")
+        self.assertEqual(
+            len(matches),
+            1,
+            f"expected exactly one {HOUSE_LOAD_VALID_ID} binary sensor",
+        )
+        return matches[0][1]
+
     def test_sample_sensor_uses_minute_trigger(self) -> None:
         template_item, _ = self.sample_sensor()
         self.assertEqual(
@@ -108,28 +120,115 @@ class EmhassLoadSampleSensorTests(unittest.TestCase):
         self.assertEqual(sensor.get("device_class"), "power")
         self.assertEqual(sensor.get("state_class"), "measurement")
 
-    def test_sample_sensor_uses_numeric_source_and_forces_update(self) -> None:
-        _, sensor = self.sample_sensor()
-        raw_sensor = self.raw_sensor()
-        self.assertEqual(raw_sensor.get("name"), "EMHASS house load power")
-        self.assertEqual(
-            sensor.get("state"),
-            "{{ states('sensor.emhass_house_load_power_w')"
-            " | float(0) | round(0) }}\n",
+    def test_sample_sensor_has_trigger_variables_block(self) -> None:
+        template_item, _ = self.sample_sensor()
+        variables = template_item.get("variables")
+        self.assertIsInstance(
+            variables,
+            Mapping,
+            "sample sensor trigger must define a variables block",
         )
-        availability = " ".join(str(sensor.get("availability", "")).split())
-        self.assertEqual(
-            availability,
-            "{% set value = states('sensor.emhass_house_load_power_w') %} "
-            "{{ value not in ['unknown', 'unavailable', 'none', ''] "
-            "and (value | float(none)) is not none }}",
+        assert isinstance(variables, Mapping)
+        for key in (
+            "p1_entity",
+            "batt_entity",
+            "envoy_entity",
+            "envoy_req",
+            "p1_state",
+            "batt_state",
+            "envoy_state",
+            "bad",
+            "p1_bad",
+            "batt_bad",
+            "envoy_bad",
+            "now_ts",
+            "p1_age",
+            "batt_age",
+            "envoy_report_age",
+            "envoy_value_age",
+            "sources_stale",
+            "source_spread",
+            "grid_w",
+            "batt_w",
+            "pv_w",
+            "raw_bal",
+            "prev_valid_ts",
+            "prev_valid_w",
+            "hold_age",
+            "quality_and_val",
+        ):
+            self.assertIn(key, variables, f"variables must define {key}")
+
+        # Transport freshness uses last_reported
+        self.assertIn("p1_state.last_reported", str(variables["p1_age"]))
+        self.assertIn("batt_state.last_reported", str(variables["batt_age"]))
+        self.assertIn(
+            "envoy_state.last_reported", str(variables["envoy_report_age"])
         )
-        self.assertEqual(
-            sensor.get("attributes"),
-            {"sampled_at": "{{ now().isoformat() }}"},
+        self.assertIn(
+            "envoy_state.last_updated", str(variables["envoy_value_age"])
         )
 
-    def test_raw_house_load_requires_live_p1_battery_and_daylight_pv(self) -> None:
+        # Source spread excludes Envoy when not envoy_req
+        source_spread = str(variables["source_spread"])
+        self.assertIn("envoy_req", source_spread)
+        self.assertIn("[p1_age, batt_age, envoy_report_age]", source_spread)
+        self.assertIn("[p1_age, batt_age]", source_spread)
+
+        # Hold age and quality thresholds
+        quality_and_val = str(variables["quality_and_val"])
+        self.assertIn("sources_stale or source_spread > 180", quality_and_val)
+        self.assertIn("raw_bal >= 0", quality_and_val)
+        self.assertIn("raw_bal >= -200", quality_and_val)
+        self.assertIn("hold_age <= 300", quality_and_val)
+        self.assertIn("'valid_noise_clamp'", quality_and_val)
+        self.assertIn("'held_estimate'", quality_and_val)
+        self.assertIn("'envoy_update_lag'", quality_and_val)
+        self.assertIn("'hold_expired'", quality_and_val)
+        self.assertIn("'no_prior_valid'", quality_and_val)
+
+        # Boot handling without this.attributes
+        prev_valid_ts = str(variables["prev_valid_ts"])
+        prev_valid_w = str(variables["prev_valid_w"])
+        self.assertIn("this is defined", prev_valid_ts)
+        self.assertIn("this.attributes is defined", prev_valid_ts)
+        self.assertIn("this is defined", prev_valid_w)
+        self.assertIn("this.attributes is defined", prev_valid_w)
+
+    def test_sample_sensor_state_and_attributes(self) -> None:
+        _, sensor = self.sample_sensor()
+        self.assertEqual(
+            sensor.get("state"),
+            '{{ quality_and_val[2] }}',
+        )
+        attrs = sensor.get("attributes")
+        self.assertIsInstance(attrs, Mapping)
+        assert isinstance(attrs, Mapping)
+
+        expected_keys = {
+            "sampled_at",
+            "load_quality",
+            "invalid_reason",
+            "estimate_reason",
+            "raw_balance_w",
+            "last_valid_at",
+            "last_valid_w",
+            "hold_age_s",
+            "source_spread_s",
+            "envoy_value_age_s",
+            "grid_w",
+            "pv_w",
+            "battery_w",
+        }
+        self.assertTrue(
+            expected_keys.issubset(attrs.keys()),
+            f"attributes missing: {expected_keys - set(attrs.keys())}",
+        )
+        self.assertIn("now().isoformat()", str(attrs["sampled_at"]))
+        self.assertIn("quality_and_val[0]", str(attrs["load_quality"]))
+        self.assertIn("this is defined", str(attrs["last_valid_at"]))
+
+    def test_raw_house_load_is_unclamped_diagnostic(self) -> None:
         sensor = self.raw_sensor()
         state = " ".join(str(sensor.get("state", "")).split())
         availability = " ".join(
@@ -141,6 +240,9 @@ class EmhassLoadSampleSensorTests(unittest.TestCase):
             state,
         )
         self.assertIn("__ENVOY_PV_ENTITY__", state)
+        self.assertIn(ENVOY_REQUIRED_ID, state)
+        self.assertIn("grid + pv - batt", state)
+        self.assertNotIn("max", state)
         self.assertIn("__P1_POWER_NET_ENTITY__", availability)
         self.assertIn(
             "sensor.__SIGEN_PLANT_SLUG___plant_battery_power",
@@ -148,16 +250,31 @@ class EmhassLoadSampleSensorTests(unittest.TestCase):
         )
         self.assertIn("__ENVOY_PV_ENTITY__", availability)
         self.assertIn("20 * 60", availability)
-        self.assertIn(ENVOY_REQUIRED_ID, state)
         self.assertIn(ENVOY_REQUIRED_ID, availability)
-        self.assertNotIn(LEGACY_ENVOY_GATE, state)
-        self.assertNotIn(LEGACY_ENVOY_GATE, availability)
-        self.assertNotIn("next_rising", state)
-        self.assertNotIn("next_rising", availability)
-        self.assertNotIn("p_pv_forecast", state)
-        self.assertNotIn("p_pv_forecast", availability)
-        self.assertNotIn("is_state('sun.sun'", state)
-        self.assertNotIn("is_state('sun.sun'", availability)
+
+    def test_house_load_valid_binary_sensor(self) -> None:
+        sensor = self.house_load_valid_sensor()
+        self.assertEqual(sensor.get("name"), "EMHASS house load valid")
+        self.assertEqual(sensor.get("unique_id"), "emhass_house_load_valid")
+        self.assertEqual(
+            sensor.get("default_entity_id"),
+            "binary_sensor.emhass_house_load_valid",
+        )
+        self.assertEqual(sensor.get("device_class"), "safety")
+        state = " ".join(str(sensor.get("state", "")).split())
+        self.assertIn("state_attr('sensor.emhass_house_load_sample_w'", state)
+        self.assertIn("'load_quality'", state)
+        self.assertIn("'valid'", state)
+        self.assertIn("'valid_noise_clamp'", state)
+        self.assertIn("'held_estimate'", state)
+
+        attrs = sensor.get("attributes")
+        self.assertIsInstance(attrs, Mapping)
+        assert isinstance(attrs, Mapping)
+        self.assertIn("quality", attrs)
+        self.assertIn("reason", attrs)
+        self.assertIn("sampled_at", attrs)
+        self.assertIn("hold_age_s", attrs)
 
     def test_envoy_required_binary_sensor_owns_gate(self) -> None:
         sensor = self.envoy_required_sensor()
