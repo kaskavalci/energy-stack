@@ -359,7 +359,8 @@ def _parse_load_history_record(
             hold_age_s = None
 
     raw_reason = (
-        attrs.get("invalid_reason")
+        attrs.get("quality_reason")
+        or attrs.get("invalid_reason")
         or attrs.get("estimate_reason")
         or attrs.get("reason")
     )

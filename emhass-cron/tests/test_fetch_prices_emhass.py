@@ -1479,6 +1479,111 @@ class NativeLoadHistoryRetryTests(unittest.TestCase):
             {"attempts": 1, "recovered": False, "delay_s": 90.0},
         )
 
+    def test_2026_09_01_incident_replay_hold_estimate_and_retry(self):
+        """Replay exact 2026-09-01 sequence:
+        Minute 0-20: normal load ~1300 W, valid.
+        Minute 20: Envoy lag causes negative raw balance; held_estimate starts.
+        Minute 25 (300s hold): validator succeeds, mode='healthy'.
+        Minute 26 (360s hold > 300s): hold expires, raises LoadHistoryError('hold_expired').
+        Retry at minute 26+90s: Envoy updates, recovers on attempt 2.
+        """
+        now = datetime(2026, 9, 1, 10, 25, 0, tzinfo=timezone.utc)
+        step_min = 30
+        prediction_horizon = 32
+
+        # 1. At minute 25 (hold age = 300s):
+        records_min25 = []
+        # Generate 32 bins of 1-minute samples:
+        for m in range(prediction_horizon * step_min):
+            sample_time = now - timedelta(minutes=(prediction_horizon * step_min - 1 - m))
+            iso = sample_time.isoformat()
+            if m >= (prediction_horizon * step_min - 5):
+                # Last 5 minutes: held estimate with hold_age <= 300
+                hold_s = (m - (prediction_horizon * step_min - 6)) * 60
+                records_min25.append({
+                    "state": "1300.0",
+                    "last_updated": iso,
+                    "attributes": {
+                        "sampled_at": iso,
+                        "load_quality": "held_estimate",
+                        "quality_reason": "envoy_update_lag",
+                        "hold_age_s": float(hold_s),
+                    },
+                })
+            else:
+                records_min25.append({
+                    "state": "1300.0",
+                    "last_updated": iso,
+                    "attributes": {
+                        "sampled_at": iso,
+                        "load_quality": "valid",
+                    },
+                })
+
+        summary_min25 = fetch_prices_emhass.validate_load_history_records(
+            records_min25,
+            prediction_horizon=prediction_horizon,
+            step_min=step_min,
+            now=now,
+        )
+        self.assertEqual(summary_min25["mode"], "healthy")
+        self.assertEqual(summary_min25["quality"], "held_estimate")
+        self.assertEqual(summary_min25["quality_reason"], "envoy_update_lag")
+
+        # 2. At minute 26 (hold age = 360s > 300s):
+        now_min26 = now + timedelta(minutes=1)
+        records_min26 = list(records_min25)
+        iso_min26 = now_min26.isoformat()
+        records_min26.append({
+            "state": "1300.0",
+            "last_updated": iso_min26,
+            "attributes": {
+                "sampled_at": iso_min26,
+                "load_quality": "invalid",
+                "quality_reason": "hold_expired",
+                "hold_age_s": 360.0,
+            },
+        })
+
+        with self.assertRaises(fetch_prices_emhass.LoadHistoryError) as ctx:
+            fetch_prices_emhass.validate_load_history_records(
+                records_min26,
+                prediction_horizon=prediction_horizon,
+                step_min=step_min,
+                now=now_min26,
+            )
+        self.assertIn("hold_expired", str(ctx.exception))
+
+        # 3. With retry: attempt 1 fails at minute 26, attempt 2 (90s later, Envoy recovers) succeeds
+        recovered_summary = dict(summary_min25)
+        recovered_summary["quality"] = "valid"
+        recovered_summary["quality_reason"] = None
+        with (
+            patch.object(
+                fetch_prices_emhass,
+                "validate_native_load_history",
+                side_effect=[
+                    ctx.exception,
+                    recovered_summary,
+                ],
+            ) as mock_validate,
+            patch("time.sleep") as mock_sleep,
+        ):
+            retry_res = fetch_prices_emhass.validate_native_load_history_with_retry(
+                Path("/dummy/secrets.yaml"),
+                Path("/dummy/share"),
+                prediction_horizon=prediction_horizon,
+                tz_name="Europe/Amsterdam",
+                max_attempts=2,
+                retry_delay_s=90.0,
+            )
+
+        self.assertEqual(mock_validate.call_count, 2)
+        mock_sleep.assert_called_once_with(90.0)
+        self.assertEqual(retry_res["retry"]["attempts"], 2)
+        self.assertTrue(retry_res["retry"]["recovered"])
+        self.assertEqual(retry_res["mode"], "healthy")
+
 
 class MpcLoadHistoryFailureTests(unittest.TestCase):
     VALID_CONFIG = {
