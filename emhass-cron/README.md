@@ -57,8 +57,16 @@ does not update it. If the HA helper update fails after three attempts, the cron
 records `mpc.ok=false` with `failure_kind=status_publish`.
 
 If load-history config, retrieval, freshness, or bin coverage fails, cron
-records `mpc.ok=false` with `failure_kind=load_history`, returns nonzero, and
-makes no EMHASS optimization, publish, or successful-finalization call.
+retries once after a bounded 90-second delay (`LOAD_HISTORY_MAX_ATTEMPTS = 2`,
+`LOAD_HISTORY_RETRY_DELAY_S = 90.0`) to allow Envoy update lag or temporary HA
+recorder delays to clear. History is requested with `significant_changes_only=0`
+and omits `no_attributes` so Home Assistant returns intermediate unchanged states
+with their `sampled_at` and `load_quality` attributes. Samples with
+`held_estimate` (holding previous valid load during negative balance from Envoy
+lag) are valid up to a 5-minute hold limit (`MAX_HELD_LOAD_AGE_S = 300`). If all
+retry attempts fail, cron records `mpc.ok=false` with `failure_kind=load_history`,
+returns nonzero, and makes no EMHASS optimization, publish, or
+successful-finalization call.
 The live config and shared HA credential file are strictly preflighted before
 any HA request. Normal MPC reads credentials once and reuses the same immutable
 URL/token snapshot for SOC, prices, history, and the successful-MPC marker;

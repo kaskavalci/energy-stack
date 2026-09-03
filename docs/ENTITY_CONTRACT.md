@@ -42,10 +42,11 @@ Package keys keep the `reterminal_emhass_*` prefix on live HA for zero-downtime 
 |-----------------|-------------|---------|
 | `sensor.electricity_meter_power_net` | reterminal P1 aliases | `ha_emhass_sensors.yaml`, house load |
 | `sensor.electricity_meter_power_*` | reterminal P1 aliases | Monitoring, dashboards |
-| `sensor.emhass_house_load_power_w` | energy-stack templates | Instantaneous calculated house load |
-| `sensor.emhass_house_load_sample_w` | energy-stack templates | EMHASS history / naive-forecast source, sampled every minute (W) |
+| `sensor.emhass_house_load_power_w` | energy-stack templates | Instantaneous unclamped raw house load balance (diagnostic W: `grid + pv - batt`) |
+| `sensor.emhass_house_load_sample_w` | energy-stack templates | EMHASS history / naive-forecast source, sampled every minute (W). States: `valid` (raw >= 0), `valid_noise_clamp` ([-200, 0) clamped to 0), `held_estimate` (holds previous valid during Envoy lag <= 300s), `invalid` (hold expired or sources stale) |
+| `binary_sensor.emhass_house_load_valid` | energy-stack templates | House load sample quality gate (`on` for `valid`, `valid_noise_clamp`, `held_estimate`; `off` for `invalid`) |
 | `sensor.emhass_pv_power_w` | energy-stack templates | PV observation |
-| `binary_sensor.emhass_envoy_required` | energy-stack templates | Envoy freshness required when sun up + dawn grace elapsed + forecast material (>=150 W) |
+| `binary_sensor.emhass_envoy_required` | energy-stack templates | Envoy freshness required when sun up + dawn grace elapsed + forecast material (>=150 W), decoupled from MPC freshness |
 | `sensor.zonneplan_current_electricity_tariff` | HA HACS | emhass-cron price fetch |
 | `input_text.emhass_planned_profit_payload` | energy-stack helpers | Cron compact planned-profit JSON transport (≤255 chars) |
 | `sensor.emhass_planned_profit_today` | energy-stack templates | Trading dashboard planned covered-slot profit |
