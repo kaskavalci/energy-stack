@@ -9,6 +9,7 @@ from datetime import datetime, timedelta, timezone
 from http.client import IncompleteRead
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs, unquote, urlsplit
 from zoneinfo import ZoneInfo
@@ -1353,6 +1354,132 @@ class FetchNativeLoadHistoryTests(unittest.TestCase):
                     )
 
 
+class NativeLoadHistoryRetryTests(unittest.TestCase):
+    @staticmethod
+    def valid_summary() -> dict[str, Any]:
+        return {
+            "mode": "healthy",
+            "required_bins": 32,
+            "covered_bins": 32,
+            "missing_bin_count": 0,
+            "missing_bins": [],
+            "interpolation_method": None,
+            "newest_sample_at": "2026-09-01T10:30:00+00:00",
+            "newest_sample_age_minutes": 0.5,
+            "quality": "valid",
+            "quality_counts": {
+                "valid": 32,
+                "valid_noise_clamp": 0,
+                "held_estimate": 0,
+                "invalid": 0,
+            },
+            "quality_reason": None,
+        }
+
+    def test_load_history_retry_recovers_on_second_attempt(self):
+        summary = self.valid_summary()
+        with (
+            patch.object(
+                fetch_prices_emhass,
+                "validate_native_load_history",
+                side_effect=[
+                    fetch_prices_emhass.LoadHistoryError("temporary lag"),
+                    summary,
+                ],
+            ) as mock_validate,
+            patch("time.sleep") as mock_sleep,
+        ):
+            res = fetch_prices_emhass.validate_native_load_history_with_retry(
+                Path("/dummy/secrets.yaml"),
+                Path("/dummy/share"),
+                prediction_horizon=32,
+                tz_name="Europe/Amsterdam",
+                max_attempts=2,
+                retry_delay_s=90.0,
+            )
+
+        self.assertEqual(mock_validate.call_count, 2)
+        mock_sleep.assert_called_once_with(90.0)
+        self.assertEqual(res["mode"], "healthy")
+        self.assertEqual(
+            res["retry"],
+            {"attempts": 2, "recovered": True, "delay_s": 90.0},
+        )
+
+    def test_load_history_retry_exhaustion_raises_and_persists_retry_meta(self):
+        failure_summary = {
+            "mode": "unsafe",
+            "required_bins": 32,
+            "covered_bins": 30,
+            "missing_bin_count": 2,
+            "missing_bins": [],
+            "interpolation_method": None,
+            "newest_sample_at": None,
+            "newest_sample_age_minutes": None,
+            "quality": "invalid",
+            "quality_counts": {
+                "valid": 30,
+                "valid_noise_clamp": 0,
+                "held_estimate": 0,
+                "invalid": 2,
+            },
+            "quality_reason": "hold_expired",
+        }
+        with (
+            patch.object(
+                fetch_prices_emhass,
+                "validate_native_load_history",
+                side_effect=fetch_prices_emhass.LoadHistoryError(
+                    "persistent failure",
+                    summary=failure_summary,
+                ),
+            ) as mock_validate,
+            patch("time.sleep") as mock_sleep,
+        ):
+            with self.assertRaises(fetch_prices_emhass.LoadHistoryError) as ctx:
+                fetch_prices_emhass.validate_native_load_history_with_retry(
+                    Path("/dummy/secrets.yaml"),
+                    Path("/dummy/share"),
+                    prediction_horizon=32,
+                    tz_name="Europe/Amsterdam",
+                    max_attempts=2,
+                    retry_delay_s=90.0,
+                )
+
+        self.assertEqual(mock_validate.call_count, 2)
+        mock_sleep.assert_called_once_with(90.0)
+        self.assertIsNotNone(ctx.exception.summary)
+        self.assertEqual(
+            ctx.exception.summary["retry"],
+            {"attempts": 2, "recovered": False, "delay_s": 90.0},
+        )
+
+    def test_load_history_retry_single_attempt_does_not_sleep(self):
+        summary = self.valid_summary()
+        with (
+            patch.object(
+                fetch_prices_emhass,
+                "validate_native_load_history",
+                return_value=summary,
+            ) as mock_validate,
+            patch("time.sleep") as mock_sleep,
+        ):
+            res = fetch_prices_emhass.validate_native_load_history_with_retry(
+                Path("/dummy/secrets.yaml"),
+                Path("/dummy/share"),
+                prediction_horizon=32,
+                tz_name="Europe/Amsterdam",
+                max_attempts=1,
+            )
+
+        self.assertEqual(mock_validate.call_count, 1)
+        mock_sleep.assert_not_called()
+        self.assertEqual(
+            res["retry"],
+            {"attempts": 1, "recovered": False, "delay_s": 90.0},
+        )
+
+
 class MpcLoadHistoryFailureTests(unittest.TestCase):
     VALID_CONFIG = {
         "prediction_horizon": 3,
@@ -1499,6 +1626,7 @@ class MpcLoadHistoryFailureTests(unittest.TestCase):
                         "run_planned_profit_side_effect",
                     )
                 )
+            stack.enter_context(patch("time.sleep"))
             stack.enter_context(patch.object(sys, "argv", argv))
             return fetch_prices_emhass.main()
 

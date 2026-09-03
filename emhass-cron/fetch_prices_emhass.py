@@ -107,6 +107,8 @@ USABLE_LOAD_QUALITIES = (
     LOAD_QUALITY_HELD_ESTIMATE,
 )
 MAX_HELD_LOAD_AGE_S = 300
+LOAD_HISTORY_MAX_ATTEMPTS = 2
+LOAD_HISTORY_RETRY_DELAY_S = 90.0
 
 
 @dataclass
@@ -707,6 +709,83 @@ def validate_native_load_history(
         summary["newest_sample_at"],
     )
     return summary
+
+
+def validate_native_load_history_with_retry(
+    secrets_path: Path,
+    share_dir: Path,
+    *,
+    prediction_horizon: int,
+    tz_name: str,
+    now: datetime | None = None,
+    load_history_config: tuple[str, int] | None = None,
+    load_history_credentials: tuple[str, str] | None = None,
+    max_attempts: int = LOAD_HISTORY_MAX_ATTEMPTS,
+    retry_delay_s: float = LOAD_HISTORY_RETRY_DELAY_S,
+) -> dict[str, Any]:
+    last_exc: LoadHistoryError | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            summary = validate_native_load_history(
+                secrets_path,
+                share_dir,
+                prediction_horizon=prediction_horizon,
+                tz_name=tz_name,
+                now=now,
+                load_history_config=load_history_config,
+                load_history_credentials=load_history_credentials,
+            )
+            summary["retry"] = {
+                "attempts": attempt,
+                "recovered": attempt > 1,
+                "delay_s": retry_delay_s,
+            }
+            if attempt > 1:
+                logging.info(
+                    "HA load history recovered on attempt %d/%d after %.1fs delay",
+                    attempt,
+                    max_attempts,
+                    retry_delay_s,
+                )
+            return summary
+        except LoadHistoryError as exc:
+            last_exc = exc
+            if attempt < max_attempts:
+                logging.warning(
+                    "HA load history validation attempt %d/%d failed (%s); retrying in %.1fs",
+                    attempt,
+                    max_attempts,
+                    exc,
+                    retry_delay_s,
+                )
+                time.sleep(retry_delay_s)
+
+    assert last_exc is not None
+    summary = last_exc.summary or {
+        "mode": LOAD_HISTORY_MODE_UNSAFE,
+        "required_bins": prediction_horizon,
+        "covered_bins": 0,
+        "missing_bin_count": prediction_horizon,
+        "missing_bins": [],
+        "interpolation_method": None,
+        "newest_sample_at": None,
+        "newest_sample_age_minutes": None,
+        "quality": LOAD_QUALITY_INVALID,
+        "quality_counts": {
+            LOAD_QUALITY_VALID: 0,
+            LOAD_QUALITY_VALID_NOISE_CLAMP: 0,
+            LOAD_QUALITY_HELD_ESTIMATE: 0,
+            LOAD_QUALITY_INVALID: 0,
+        },
+        "quality_reason": None,
+    }
+    summary["retry"] = {
+        "attempts": max_attempts,
+        "recovered": False,
+        "delay_s": retry_delay_s,
+    }
+    last_exc.summary = summary
+    raise last_exc
 
 
 def publish_ha_input_datetime(
@@ -1953,7 +2032,7 @@ def main() -> int:
 
         assert load_history_config is not None
         try:
-            load_history_summary = validate_native_load_history(
+            load_history_summary = validate_native_load_history_with_retry(
                 args.secrets,
                 args.share_dir,
                 prediction_horizon=prediction_horizon,
