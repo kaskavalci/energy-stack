@@ -263,6 +263,21 @@ class C1FailPvSensorGateTests(unittest.TestCase):
         self.assertIn("emhass_notify_C1_pv", text)
 
 
+class C2aFailHouseLoadSensorTests(unittest.TestCase):
+    """C2a must consume binary_sensor.emhass_house_load_valid."""
+
+    def test_c2a_consumes_emhass_house_load_valid(self) -> None:
+        text = monitoring_text()
+        marker = "unique_id: emhass_fail_house_load\n"
+        self.assertIn(marker, text)
+        block = text.split(marker, 1)[1]
+        next_sensor = block.find("\n      - name:")
+        if next_sensor != -1:
+            block = block[:next_sensor]
+        self.assertIn("binary_sensor.emhass_house_load_valid", block)
+        self.assertIn("is_state('binary_sensor.emhass_house_load_valid', 'off')", block)
+
+
 class AutomationIdentityTests(unittest.TestCase):
     def test_monitoring_automation_ids_are_unique(self) -> None:
         ids = re.findall(r"^  - id: (\S+)$", monitoring_text(), flags=re.M)

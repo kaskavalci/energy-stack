@@ -302,7 +302,7 @@ class NativePvPanelTests(unittest.TestCase):
         self.assertEqual(
             entities,
             [
-                "sensor.emhass_house_load_power_w",
+                "sensor.emhass_house_load_sample_w",
                 "__P1_POWER_CONSUMPTION_ENTITY__",
                 "__P1_POWER_PRODUCTION_ENTITY__",
                 "sensor.net_electricity_today",
@@ -314,6 +314,20 @@ class NativePvPanelTests(unittest.TestCase):
             "__P1_POWER_NET_ENTITY__",
         ):
             self.assertNotIn(duplicate, entities)
+
+    def test_p1_grid_load_history_graph_uses_sample_sensor(self) -> None:
+        graph = next(
+            card
+            for card in self.trading_view().get("cards", [])
+            if isinstance(card, Mapping)
+            and card.get("title") == "P1 grid/load vs EMHASS plan step (24 h)"
+        )
+        entities = [
+            row.get("entity") if isinstance(row, Mapping) else row
+            for row in graph.get("entities", [])
+        ]
+        self.assertIn("sensor.emhass_house_load_sample_w", entities)
+        self.assertNotIn("sensor.emhass_house_load_power_w", entities)
 
     def test_plan_vs_battery_inverts_sigen_power_for_emhass_sign(self) -> None:
         """Keep Sigen entity history; invert in ApexCharts to match EMHASS sign."""

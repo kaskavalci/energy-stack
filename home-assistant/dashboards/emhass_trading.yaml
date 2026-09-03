@@ -10,6 +10,8 @@ views:
           - entity: sensor.optim_status
           - entity: binary_sensor.emhass_plan_valid
           - entity: binary_sensor.emhass_control_allowed
+          - entity: binary_sensor.emhass_house_load_valid
+            name: House load valid
           - entity: input_boolean.emhass_auto_control_master
           - entity: input_select.emhass_ems_mode_native
           - entity: input_number.emhass_soc_min
@@ -56,7 +58,7 @@ views:
       - type: entities
         title: Actual (Sigen / P1)
         entities:
-          - entity: sensor.emhass_house_load_power_w
+          - entity: sensor.emhass_house_load_sample_w
             name: Derived house load
           - entity: __P1_POWER_CONSUMPTION_ENTITY__
             name: P1 gross import
@@ -71,7 +73,7 @@ views:
         entities:
           - entity: __P1_POWER_NET_ENTITY__
           - entity: sensor.p_grid_forecast
-          - entity: sensor.emhass_house_load_power_w
+          - entity: sensor.emhass_house_load_sample_w
           - entity: sensor.p_load_forecast
 
       - type: custom:apexcharts-card

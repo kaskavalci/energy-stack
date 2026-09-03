@@ -121,7 +121,7 @@ template:
               {% set ns.fail = true %}
             {% endif %}
           {% endfor %}
-          {{ ns.fail }}
+          {{ ns.fail or is_state('binary_sensor.emhass_house_load_valid', 'off') }}
 
       - name: EMHASS fail battery SOC
         unique_id: emhass_fail_battery_soc
