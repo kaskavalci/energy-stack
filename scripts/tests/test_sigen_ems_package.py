@@ -645,35 +645,18 @@ class SigenIdleSelfConsumptionTests(unittest.TestCase):
             self.assertIn(discharge_mode, trigger)
             self.assertIn(discharge_mode, condition)
 
-    def test_floor_cutout_restores_concurrent_idle_after_hard_stop(self) -> None:
-        action = self.floor_cutout().split("    action:\n", 1)[1]
-        reconcile = action.split("      - if:\n", 1)[1]
-        self.assertIn("p >= (0 - threshold)", action)
-        self.assertIn("p <= threshold", action)
-        self.assertIn("entity_id: input_boolean.emhass_recovery_active", reconcile)
-        self.assertIn('state: "off"', reconcile)
-        self.assertIn("service: script.sigen_restore_native_control", action)
-        self.assertLess(
-            action.index("service: script.sigen_apply_idle_limits"),
-            action.index("service: script.sigen_restore_native_control"),
-        )
-        self.assertLess(
-            action.index("service: logbook.log"),
-            action.index("service: script.sigen_restore_native_control"),
-        )
-
-    def test_floor_cutout_is_inclusive_and_keeps_hard_stop(self) -> None:
+    def test_floor_cutout_is_inclusive_and_restores_native(self) -> None:
         floor = self.floor_cutout()
         self.assertGreaterEqual(floor.count("0 <= soc <= min_soc"), 2)
-        self.assertIn("service: script.sigen_set_ems_mode", floor)
-        self.assertIn("mode: idle", floor)
-        self.assertIn("service: script.sigen_apply_idle_limits", floor)
+        self.assertIn("service: script.sigen_restore_native_control", floor)
+        self.assertIn("reason: soc_floor", floor)
+        self.assertNotIn("service: script.sigen_apply_idle_limits", floor)
 
     def test_floor_cutout_is_restartable_and_preempts_limit_writers(self) -> None:
         floor = self.floor_cutout()
         action = floor.split("    action:\n", 1)[1]
         preempt = action.split(
-            "      - service: script.sigen_set_ems_mode\n", 1
+            "      - service: script.sigen_restore_native_control\n", 1
         )[0]
         self.assertIn("mode: restart", floor)
         self.assertIn("service: script.turn_off", preempt)
@@ -684,17 +667,17 @@ class SigenIdleSelfConsumptionTests(unittest.TestCase):
         self.assertNotIn("script.sigen_apply_charge_limits", preempt)
         self.assertNotIn("script.sigen_start_recovery", preempt)
         self.assertNotIn("script.sigen_apply_active_recovery", preempt)
+        self.assertIn("service: script.sigen_restore_native_control", action)
 
-    def test_floor_cutout_preempts_before_standby_and_zero_limits(self) -> None:
+    def test_floor_cutout_preempts_before_native_restore(self) -> None:
         action = self.floor_cutout().split("    action:\n", 1)[1]
         self.assertIn("service: script.turn_off", action)
+        self.assertIn("service: script.sigen_restore_native_control", action)
         preempt_position = action.index("service: script.turn_off")
-        standby_position = action.index("service: script.sigen_set_ems_mode")
-        zero_limits_position = action.index(
-            "service: script.sigen_apply_idle_limits"
+        restore_position = action.index(
+            "service: script.sigen_restore_native_control"
         )
-        self.assertLess(preempt_position, standby_position)
-        self.assertLess(preempt_position, zero_limits_position)
+        self.assertLess(preempt_position, restore_position)
 
     def test_true_deadband_uses_confirmed_native_restoration(self) -> None:
         marker = (
@@ -706,7 +689,7 @@ class SigenIdleSelfConsumptionTests(unittest.TestCase):
         self.assertIn("service: script.sigen_restore_native_control", branch)
         self.assertNotIn("service: script.sigen_apply_idle_limits", branch)
 
-    def test_rejected_positive_discharge_reaches_standby_not_native(self) -> None:
+    def test_rejected_positive_discharge_restores_native(self) -> None:
         discharge_guard = (
             'value_template: "{{ p > threshold and discharge_limit >= threshold '
             'and soc > min_soc_frac * 100 }}"'
@@ -722,16 +705,15 @@ class SigenIdleSelfConsumptionTests(unittest.TestCase):
         )[0]
         self.assertNotIn("discharge_limit", native_branch)
         fallback = self.apply.split("        default:\n", 1)[1]
-        self.assertIn("service: script.sigen_set_ems_mode", fallback)
-        self.assertIn("mode: idle", fallback)
-        self.assertIn("service: script.sigen_apply_idle_limits", fallback)
+        self.assertIn("service: script.sigen_restore_native_control", fallback)
+        self.assertNotIn("service: script.sigen_apply_idle_limits", fallback)
 
-    def test_final_fallback_remains_standby_with_zero_limits(self) -> None:
+    def test_final_fallback_restores_native(self) -> None:
         fallback = self.apply.split("        default:\n", 1)[1]
-        self.assertIn("service: script.sigen_set_ems_mode", fallback)
-        self.assertIn("mode: idle", fallback)
-        self.assertIn("service: script.sigen_apply_idle_limits", fallback)
-        self.assertNotIn("service: script.sigen_restore_native_control", fallback)
+        self.assertIn("service: script.sigen_restore_native_control", fallback)
+        self.assertNotIn("service: script.sigen_set_ems_mode", fallback)
+        self.assertNotIn("service: script.sigen_apply_idle_limits", fallback)
+        self.assertIn("reason: idle", fallback)
 
 
 class EmhassRecoveryStateMachineTests(unittest.TestCase):

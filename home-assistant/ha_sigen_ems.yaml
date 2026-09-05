@@ -745,10 +745,9 @@ script:
                 data:
                   reason: idle
         default:
-          - service: script.sigen_set_ems_mode
+          - service: script.sigen_restore_native_control
             data:
-              mode: idle
-          - service: script.sigen_apply_idle_limits
+              reason: idle
 
 automation:
   - id: emhass_sigen_kill_switch_off
@@ -869,22 +868,9 @@ automation:
             block_reason={{
             state_attr('binary_sensor.emhass_control_allowed', 'block_reason') }}.
           action: Monitor native fallback confirmation.
-      - choose:
-          - conditions:
-              - condition: template
-                value_template: >-
-                  {% set soc = states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') | float(none) %}
-                  {% set min_soc = states('input_number.emhass_soc_min') | float(5) %}
-                  {{ soc is not none and soc < min_soc }}
-            sequence:
-              - service: script.sigen_set_ems_mode
-                data:
-                  mode: idle
-              - service: script.sigen_apply_idle_limits
-        default:
-          - service: script.sigen_restore_native_control
-            data:
-              reason: stale_plan
+      - service: script.sigen_restore_native_control
+        data:
+          reason: stale_plan
 
   - id: emhass_sigen_disable_on_bad_optim
     alias: EMHASS Sigen — disable when optim not Optimal
@@ -956,32 +942,16 @@ automation:
             - script.sigen_restore_native_control
             - script.sigen_set_ems_mode
             - script.sigen_apply_discharge_limits
-      - service: script.sigen_set_ems_mode
+      - service: script.sigen_restore_native_control
         data:
-          mode: idle
-      - service: script.sigen_apply_idle_limits
+          reason: soc_floor
       - service: logbook.log
         data:
           name: "EMHASS EMS"
           entity_id: sensor.__SIGEN_PLANT_SLUG___plant_battery_soc
           message: >-
             SOC {{ states('sensor.__SIGEN_PLANT_SLUG___plant_battery_soc') }}% hit floor
-            ({{ states('input_number.emhass_soc_min') }}%). Discharge stopped.
-      - if:
-          - condition: template
-            value_template: >-
-              {% set p = states('sensor.p_batt_forecast') | float(none) %}
-              {% set threshold = states('input_number.emhass_power_threshold_w') | float(500) %}
-              {{ p is not none
-                 and p >= (0 - threshold)
-                 and p <= threshold }}
-          - condition: state
-            entity_id: input_boolean.emhass_recovery_active
-            state: "off"
-        then:
-          - service: script.sigen_restore_native_control
-            data:
-              reason: soc_floor
+            ({{ states('input_number.emhass_soc_min') }}%). Command discharge stopped; restored native self-consumption.
 
   # --- Recovery charging (Layer 3) ---
 

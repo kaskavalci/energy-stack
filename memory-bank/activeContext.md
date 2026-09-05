@@ -1,7 +1,74 @@
 # Active Context
 
-**Last updated:** 2026-08-30
+## EMHASS load-sample template fix — HA DEPLOYED; MPC history backfill pending (2026-09-04)
+
+- Deployed the direct `states[entity_id]` freshness lookup fix to HA.
+- HA config check passed and the container restarted cleanly.
+- Backup: `/home/halil/homeassistant/config/backups/energy-stack-20260904-225102/`
+- Live sensor: `load_quality=valid`, `invalid_reason=None`, `raw_balance_w=402`,
+  `last_valid_at` populated.
+- Live `/api/template` tests: load-sample 1/1 passed; Envoy gate 12/12 passed.
+- Manual MPC fetched 51 prices but failed closed after two load-history checks:
+  1/32 bins covered, 31 missing, `failure_kind=load_history`. No stale or
+  synthetic history was written.
+- Next action: allow the new valid samples to build the required 32-bin native
+  history, then run a manual MPC and confirm `mpc.ok=true`.
+
+## Follow-up live check — sample valid; old 13-bin gap still blocks MPC (2026-09-05)
+
+- `sensor.emhass_house_load_sample_w`: `593 W`, `load_quality=valid`,
+  `invalid_reason=None`, `sampled_at=2026-09-05T07:41:00+02:00`.
+- `binary_sensor.emhass_house_load_valid=on`.
+- `binary_sensor.emhass_mpc_fresh=off` (`reason=plan_missing`),
+  `binary_sensor.emhass_plan_valid=off`, and
+  `binary_sensor.emhass_control_allowed=off`.
+- Latest MPC marker: `mpc.ok=false`; 19/32 bins covered, 13 missing from
+  2026-09-04 14:00–20:00 UTC. The gap is too large for degraded mode.
+- Containers are up and EMHASS is healthy. Do not bypass the gate or write
+  synthetic history; the gap should leave the 32-bin window after about 14:00
+  CEST if valid samples continue.
+
+## Temporary MPC horizon 12 — MPC RECOVERED; restoration required (2026-09-05)
+
+- Remote `/home/halil/workspace/energy-stack/emhass/share/config.json` was
+  changed from `prediction_horizon: 32` to `12` with an atomic update.
+- Backup: `/home/halil/workspace/energy-stack/emhass/share/config.json.bak-load-gap-20260905-075445`
+- Manual MPC succeeded at `2026-09-05T07:55:43+02:00`: `mpc.ok=true`,
+  healthy load history `12/12`, weather refresh, optimization, and publish
+  all succeeded. HA now reports `emhass_mpc_fresh=on` and
+  `emhass_plan_valid=on`.
+- **Follow-up:** restore remote `prediction_horizon` to `32` after the native
+  history contains the full 32-bin window. Verify one full-horizon MPC run
+  with `mpc.ok=true`; keep the backup until that check passes.
+- Follow-up live check: the 08:00 CEST scheduled run succeeded with
+  `mpc.ok=true`, `prediction_horizon=12`, and `12/12` healthy bins. HA reports
+  `emhass_mpc_fresh=on` and `emhass_plan_valid=on`; the current EMHASS output
+  contains 12 plan rows, so the day-ahead view is intentionally incomplete.
+
+## Low-SOC self-consumption restoration fix — READY FOR DEPLOY (2026-09-05)
+
+- Root cause diagnosed: `emhass_soc_floor_cutout` previously commanded `mode: idle`
+  (`Standby`) and zero limits (`sigen_apply_idle_limits`), and only attempted native
+  restoration if `p_batt_forecast` was already inside the deadband. Because the cutout
+  only triggers during active command discharge, this check always evaluated false.
+  Subsequently, `binary_sensor.emhass_control_allowed=off` (`soc_below_floor`) blocked
+  all scheduled plan applications, trapping the battery in `Standby` with 0 kW limits.
+- Fix applied to repo:
+  - `emhass_soc_floor_cutout`: preempts active discharge writers then immediately calls
+    `script.sigen_restore_native_control` (`reason: soc_floor`), restoring native
+    `Maximum Self-consumption (Default)` and limits (8.8/9.0 kW) unconditionally.
+  - `sigen_apply_emhass_plan`: default fallback now calls `script.sigen_restore_native_control`
+    (`reason: idle`) instead of dropping to Standby with 0 kW limits.
+  - `emhass_sigen_disable_on_stale_plan`: removed low-SOC branch forcing Standby;
+    calls `script.sigen_restore_native_control` (`reason: stale_plan`) unconditionally.
+  - Spec updated: `docs/superpowers/specs/2026-07-22-emhass-idle-self-consumption-design.md`.
+  - Regression tests in `scripts/tests/test_sigen_ems_package.py`: 45/45 tests passing.
+- Next step: deploy package to HA Container via `./scripts/deploy-home-assistant.sh`
+  upon operator approval.
+
+**Last updated:** 2026-09-05
 **Author:** Composer
+
 
 ## EMHASS Envoy forecast gate — HA DEPLOYED; sunrise pending (2026-08-30)
 
