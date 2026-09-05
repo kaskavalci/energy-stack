@@ -45,7 +45,7 @@
   `emhass_mpc_fresh=on` and `emhass_plan_valid=on`; the current EMHASS output
   contains 12 plan rows, so the day-ahead view is intentionally incomplete.
 
-## Low-SOC self-consumption restoration fix — READY FOR DEPLOY (2026-09-05)
+## Low-SOC self-consumption restoration fix — HA DEPLOYED & VERIFIED (2026-09-05)
 
 - Root cause diagnosed: `emhass_soc_floor_cutout` previously commanded `mode: idle`
   (`Standby`) and zero limits (`sigen_apply_idle_limits`), and only attempted native
@@ -53,7 +53,7 @@
   only triggers during active command discharge, this check always evaluated false.
   Subsequently, `binary_sensor.emhass_control_allowed=off` (`soc_below_floor`) blocked
   all scheduled plan applications, trapping the battery in `Standby` with 0 kW limits.
-- Fix applied to repo:
+- Fix applied to repo and committed (`cb0eb5e`):
   - `emhass_soc_floor_cutout`: preempts active discharge writers then immediately calls
     `script.sigen_restore_native_control` (`reason: soc_floor`), restoring native
     `Maximum Self-consumption (Default)` and limits (8.8/9.0 kW) unconditionally.
@@ -63,8 +63,15 @@
     calls `script.sigen_restore_native_control` (`reason: stale_plan`) unconditionally.
   - Spec updated: `docs/superpowers/specs/2026-07-22-emhass-idle-self-consumption-design.md`.
   - Regression tests in `scripts/tests/test_sigen_ems_package.py`: 45/45 tests passing.
-- Next step: deploy package to HA Container via `./scripts/deploy-home-assistant.sh`
-  upon operator approval.
+- Deployed to Home Assistant via `./scripts/deploy-home-assistant.sh`:
+  - Backup: `/home/halil/homeassistant/config/backups/energy-stack-20260905-091506/`
+  - HA config check: PASS (`Testing configuration at /config`)
+  - Container restarted cleanly (`Container homeassistant Started`)
+- Live verification:
+  - `select.sigen_0_plant_remote_ems_control_mode`: `Maximum Self-consumption (Default)`
+  - Limits confirmed: charge `8.8 kW` / discharge `9.0 kW`
+  - SOC: `3.0%` (safe in native self-consumption without standby lockout)
+  - Master helper remains `on`.
 
 **Last updated:** 2026-09-05
 **Author:** Composer
