@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Render home-assistant/*.yaml templates using config/site.env __PLACEHOLDER__ tokens.
 set -euo pipefail
+unset CDPATH 2>/dev/null || true
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=lib/source-site-env.sh
 source "${ROOT}/scripts/lib/source-site-env.sh"

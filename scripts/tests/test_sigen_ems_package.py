@@ -173,6 +173,26 @@ class SigenRestoreReasonContractTests(unittest.TestCase):
         self.assertIn("selector:", reason_block)
         self.assertIn("default: unknown", self.restore)
 
+    def test_native_restore_stops_and_confirms_discharge_before_mode_selection(self) -> None:
+        self.assertIn(
+            "entity_id: number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit",
+            self.restore,
+        )
+        self.assertIn("value: 0", self.restore)
+        self.assertIn("wait_template:", self.restore)
+        self.assertIn("not wait.completed", self.restore)
+        self.assertIn(
+            'stop: "Native restore discharge stop not confirmed"',
+            self.restore,
+        )
+        self.assertLess(
+            self.restore.index(
+                "service: number.set_value\n        continue_on_error: true\n        target:\n"
+                "          entity_id: number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit"
+            ),
+            self.restore.index("service: select.select_option"),
+        )
+
     def test_every_restore_caller_passes_reason(self) -> None:
         for automation_id, expected_reasons in RESTORE_CALLER_REASONS.items():
             if automation_id == "sigen_disable_remote_ems":
@@ -403,13 +423,15 @@ class SigenNativeRestoreTests(unittest.TestCase):
         self.assertIn("mode: restart", self.restore)
         select_position = self.restore.index("service: select.select_option")
         first_wait_position = self.restore.index("- wait_template:")
+        second_wait_position = self.restore.rindex("- wait_template:")
         target_calculation_position = self.restore.index("charge_device_max_kw:")
         charge_write_position = self.restore.index(
             "entity_id: number.__SIGEN_PLANT_SLUG___plant_max_charging_limit"
         )
-        self.assertLess(select_position, first_wait_position)
-        self.assertLess(first_wait_position, target_calculation_position)
+        self.assertLess(first_wait_position, select_position)
+        self.assertLess(select_position, target_calculation_position)
         self.assertLess(target_calculation_position, charge_write_position)
+        self.assertLess(charge_write_position, second_wait_position)
         self.assertIn('timeout: "00:01:15"', self.restore)
 
     def test_restore_clamps_both_operator_caps_to_device_maxima(self) -> None:
@@ -665,8 +687,8 @@ class SigenIdleSelfConsumptionTests(unittest.TestCase):
         self.assertIn("script.sigen_set_ems_mode", preempt)
         self.assertIn("script.sigen_apply_discharge_limits", preempt)
         self.assertNotIn("script.sigen_apply_charge_limits", preempt)
-        self.assertNotIn("script.sigen_start_recovery", preempt)
-        self.assertNotIn("script.sigen_apply_active_recovery", preempt)
+        self.assertIn("script.sigen_start_recovery", preempt)
+        self.assertIn("script.sigen_apply_active_recovery", preempt)
         self.assertIn("service: script.sigen_restore_native_control", action)
 
     def test_floor_cutout_preempts_before_native_restore(self) -> None:
@@ -800,6 +822,17 @@ class EmhassRecoveryStateMachineTests(unittest.TestCase):
         self.assertLess(
             start.index(valid_soc),
             start.index("service: script.sigen_start_recovery"),
+        )
+
+    def test_recovery_start_preempts_late_native_restore(self) -> None:
+        start = script_block(
+            "sigen_start_recovery", "sigen_apply_active_recovery"
+        )
+        self.assertIn("service: script.turn_off", start)
+        self.assertIn("script.sigen_restore_native_control", start)
+        self.assertLess(
+            start.index("service: script.turn_off"),
+            start.index("service: input_number.set_value"),
         )
 
     def test_active_recovery_owns_actuator_until_target(self) -> None:

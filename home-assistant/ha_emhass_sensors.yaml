@@ -53,7 +53,7 @@ template:
       - name: EMHASS house load valid
         unique_id: emhass_house_load_valid
         default_entity_id: binary_sensor.emhass_house_load_valid
-        device_class: safety
+        icon: mdi:check-circle
         state: >
           {{ state_attr('sensor.emhass_house_load_sample_w', 'load_quality') in ['valid', 'valid_noise_clamp', 'held_estimate'] }}
         attributes:
@@ -145,18 +145,15 @@ template:
       batt_entity: 'sensor.__SIGEN_PLANT_SLUG___plant_battery_power'
       envoy_entity: '__ENVOY_PV_ENTITY__'
       envoy_req: "{{ is_state('binary_sensor.emhass_envoy_required', 'on') }}"
-      p1_state: "{{ states[p1_entity] }}"
-      batt_state: "{{ states[batt_entity] }}"
-      envoy_state: "{{ states[envoy_entity] }}"
       bad: "{{ ['unknown', 'unavailable', 'none', ''] }}"
-      p1_bad: "{{ p1_state is none or p1_state.state in bad }}"
-      batt_bad: "{{ batt_state is none or batt_state.state in bad }}"
-      envoy_bad: "{{ envoy_state is none or envoy_state.state in bad }}"
+      p1_bad: "{{ states[p1_entity] is none or states[p1_entity].state in bad }}"
+      batt_bad: "{{ states[batt_entity] is none or states[batt_entity].state in bad }}"
+      envoy_bad: "{{ states[envoy_entity] is none or states[envoy_entity].state in bad }}"
       now_ts: "{{ as_timestamp(now()) }}"
-      p1_age: "{{ (now_ts - as_timestamp(p1_state.last_reported, default=0)) if (p1_state is not none and p1_state.last_reported is defined) else 9999 }}"
-      batt_age: "{{ (now_ts - as_timestamp(batt_state.last_reported, default=0)) if (batt_state is not none and batt_state.last_reported is defined) else 9999 }}"
-      envoy_report_age: "{{ (now_ts - as_timestamp(envoy_state.last_reported, default=0)) if (envoy_state is not none and envoy_state.last_reported is defined) else 9999 }}"
-      envoy_value_age: "{{ (now_ts - as_timestamp(envoy_state.last_updated, default=0)) if (envoy_state is not none and envoy_state.last_updated is defined) else 9999 }}"
+      p1_age: "{{ (now_ts - as_timestamp(states[p1_entity].last_reported, default=0)) if (states[p1_entity] is not none and states[p1_entity].last_reported is defined) else 9999 }}"
+      batt_age: "{{ (now_ts - as_timestamp(states[batt_entity].last_reported, default=0)) if (states[batt_entity] is not none and states[batt_entity].last_reported is defined) else 9999 }}"
+      envoy_report_age: "{{ (now_ts - as_timestamp(states[envoy_entity].last_reported, default=0)) if (states[envoy_entity] is not none and states[envoy_entity].last_reported is defined) else 9999 }}"
+      envoy_value_age: "{{ (now_ts - as_timestamp(states[envoy_entity].last_updated, default=0)) if (states[envoy_entity] is not none and states[envoy_entity].last_updated is defined) else 9999 }}"
       sources_stale: >
         {{ p1_bad or batt_bad or p1_age > 180 or batt_age > 180 or (envoy_req and (envoy_bad or envoy_report_age > 180)) }}
       source_spread: >
@@ -170,9 +167,9 @@ template:
       pv_w: "{{ 0 if ((not envoy_req) and envoy_bad) else (states(envoy_entity) | float(0) * 1000) }}"
       raw_bal: "{{ grid_w + pv_w - batt_w }}"
       prev_valid_ts: >
-        {{ as_timestamp(this.attributes.last_valid_at, default=0) if (this is defined and this.attributes is defined and this.attributes.last_valid_at is defined) else 0 }}
+        {{ as_timestamp(state_attr('sensor.emhass_house_load_sample_w', 'last_valid_at'), default=0) }}
       prev_valid_w: >
-        {{ this.attributes.last_valid_w | float(none) if (this is defined and this.attributes is defined and this.attributes.last_valid_w is defined) else none }}
+        {{ state_attr('sensor.emhass_house_load_sample_w', 'last_valid_w') | float(none) }}
       hold_age: "{{ (now_ts - prev_valid_ts) if prev_valid_ts > 0 else 9999 }}"
       quality_and_val: >
         {% if sources_stale or source_spread > 180 %}
@@ -181,7 +178,7 @@ template:
           {{ ('valid', 'none', raw_bal | round(0)) }}
         {% elif raw_bal >= -200 %}
           {{ ('valid_noise_clamp', 'none', 0) }}
-        {% elif prev_valid_w is not none and hold_age <= 300 %}
+        {% elif prev_valid_w is not none and hold_age <= 600 %}
           {{ ('held_estimate', 'envoy_update_lag', prev_valid_w) }}
         {% else %}
           {{ ('invalid', 'hold_expired' if prev_valid_w is not none else 'no_prior_valid', (prev_valid_w if prev_valid_w is not none else 0)) }}

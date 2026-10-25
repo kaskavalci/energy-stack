@@ -63,7 +63,7 @@ recorder delays to clear. History is requested with `significant_changes_only=0`
 and omits `no_attributes` so Home Assistant returns intermediate unchanged states
 with their `sampled_at` and `load_quality` attributes. Samples with
 `held_estimate` (holding previous valid load during negative balance from Envoy
-lag) are valid up to a 5-minute hold limit (`MAX_HELD_LOAD_AGE_S = 300`). If all
+lag) are valid up to a 10-minute hold limit (`MAX_HELD_LOAD_AGE_S = 600`). If all
 retry attempts fail, cron records `mpc.ok=false` with `failure_kind=load_history`,
 returns nonzero, and makes no EMHASS optimization, publish, or
 successful-finalization call.

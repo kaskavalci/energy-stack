@@ -134,9 +134,6 @@ class EmhassLoadSampleSensorTests(unittest.TestCase):
             "batt_entity",
             "envoy_entity",
             "envoy_req",
-            "p1_state",
-            "batt_state",
-            "envoy_state",
             "bad",
             "p1_bad",
             "batt_bad",
@@ -159,14 +156,21 @@ class EmhassLoadSampleSensorTests(unittest.TestCase):
         ):
             self.assertIn(key, variables, f"variables must define {key}")
 
-        # Transport freshness uses last_reported
-        self.assertIn("p1_state.last_reported", str(variables["p1_age"]))
-        self.assertIn("batt_state.last_reported", str(variables["batt_age"]))
+        for removed in ("p1_state", "batt_state", "envoy_state"):
+            self.assertNotIn(
+                removed,
+                variables,
+                f"{removed} must not be stored as an intermediate variable to prevent Jinja string coercion",
+            )
+
+        # Transport freshness uses states[entity].last_reported / last_updated
+        self.assertIn("states[p1_entity].last_reported", str(variables["p1_age"]))
+        self.assertIn("states[batt_entity].last_reported", str(variables["batt_age"]))
         self.assertIn(
-            "envoy_state.last_reported", str(variables["envoy_report_age"])
+            "states[envoy_entity].last_reported", str(variables["envoy_report_age"])
         )
         self.assertIn(
-            "envoy_state.last_updated", str(variables["envoy_value_age"])
+            "states[envoy_entity].last_updated", str(variables["envoy_value_age"])
         )
 
         # Source spread excludes Envoy when not envoy_req
@@ -180,20 +184,18 @@ class EmhassLoadSampleSensorTests(unittest.TestCase):
         self.assertIn("sources_stale or source_spread > 180", quality_and_val)
         self.assertIn("raw_bal >= 0", quality_and_val)
         self.assertIn("raw_bal >= -200", quality_and_val)
-        self.assertIn("hold_age <= 300", quality_and_val)
+        self.assertIn("hold_age <= 600", quality_and_val)
         self.assertIn("'valid_noise_clamp'", quality_and_val)
         self.assertIn("'held_estimate'", quality_and_val)
         self.assertIn("'envoy_update_lag'", quality_and_val)
         self.assertIn("'hold_expired'", quality_and_val)
         self.assertIn("'no_prior_valid'", quality_and_val)
 
-        # Boot handling without this.attributes
+        # State attribute lookups for previous valid values
         prev_valid_ts = str(variables["prev_valid_ts"])
         prev_valid_w = str(variables["prev_valid_w"])
-        self.assertIn("this is defined", prev_valid_ts)
-        self.assertIn("this.attributes is defined", prev_valid_ts)
-        self.assertIn("this is defined", prev_valid_w)
-        self.assertIn("this.attributes is defined", prev_valid_w)
+        self.assertIn("state_attr('sensor.emhass_house_load_sample_w', 'last_valid_at')", prev_valid_ts)
+        self.assertIn("state_attr('sensor.emhass_house_load_sample_w', 'last_valid_w')", prev_valid_w)
 
     def test_sample_sensor_state_and_attributes(self) -> None:
         _, sensor = self.sample_sensor()
@@ -260,7 +262,8 @@ class EmhassLoadSampleSensorTests(unittest.TestCase):
             sensor.get("default_entity_id"),
             "binary_sensor.emhass_house_load_valid",
         )
-        self.assertEqual(sensor.get("device_class"), "safety")
+        self.assertEqual(sensor.get("icon"), "mdi:check-circle")
+        self.assertNotIn("device_class", sensor)
         state = " ".join(str(sensor.get("state", "")).split())
         self.assertIn("state_attr('sensor.emhass_house_load_sample_w'", state)
         self.assertIn("'load_quality'", state)

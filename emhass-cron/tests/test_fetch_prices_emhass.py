@@ -116,7 +116,7 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
         self.assertEqual(summary["covered_bins"], 32)
         self.assertEqual(summary["quality"], "valid_noise_clamp")
 
-    def test_held_estimate_within_300s_is_usable(self):
+    def test_held_estimate_within_600s_is_usable(self):
         now = datetime(2026, 9, 1, 10, 30, tzinfo=timezone.utc)
         records = [
             {
@@ -127,7 +127,7 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
                 "attributes": {
                     "sampled_at": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
                     "load_quality": "valid" if i < 31 else "held_estimate",
-                    "hold_age_s": 120 if i == 31 else 0,
+                    "hold_age_s": 300 if i == 31 else 0,
                     "estimate_reason": "envoy_update_lag" if i == 31 else None,
                 },
             }
@@ -140,7 +140,7 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
         self.assertEqual(summary["quality"], "held_estimate")
         self.assertEqual(summary["quality_reason"], "envoy_update_lag")
 
-    def test_held_estimate_exceeding_300s_is_reclassified_as_invalid(self):
+    def test_held_estimate_exceeding_600s_is_reclassified_as_invalid(self):
         now = datetime(2026, 9, 1, 10, 30, tzinfo=timezone.utc)
         records = [
             {
@@ -151,7 +151,7 @@ class NativeLoadHistoryValidationTests(unittest.TestCase):
                 "attributes": {
                     "sampled_at": (now - timedelta(minutes=30 * (31 - i))).isoformat(),
                     "load_quality": "valid" if i < 31 else "held_estimate",
-                    "hold_age_s": 301 if i == 31 else 0,
+                    "hold_age_s": 601 if i == 31 else 0,
                 },
             }
             for i in range(32)

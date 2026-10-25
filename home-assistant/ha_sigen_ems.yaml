@@ -243,6 +243,33 @@ script:
           discharge_cap_kw: >-
             {{ [0, (states('input_number.emhass_max_discharge_cap_w')
                       | float(0) / 1000)] | max | round(2) }}
+      - service: number.set_value
+        continue_on_error: true
+        target:
+          entity_id: number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit
+        data:
+          value: 0
+      - wait_template: >-
+          {% set discharge_actual_kw =
+               states('number.__SIGEN_PLANT_SLUG___plant_max_discharging_limit') | float(none) %}
+          {{ discharge_actual_kw is not none and (discharge_actual_kw | abs) <= 0.02 }}
+        timeout: "00:00:30"
+        continue_on_timeout: true
+      - if:
+          - condition: template
+            value_template: "{{ not wait.completed }}"
+        then:
+          - service: script.emhass_log_event
+            continue_on_error: true
+            data:
+              incident_id: D2
+              phase: limit_confirmation
+              message: >-
+                Native restore could not confirm a zero discharge limit;
+                native mode selection was not attempted.
+              action: Check Sigenergy limit entities and sigenergy2mqtt.
+          - stop: "Native restore discharge stop not confirmed"
+            error: true
       - service: select.select_option
         continue_on_error: true
         target:
@@ -646,6 +673,10 @@ script:
         value_template: >-
           {{ charge_limit_w | float(0)
              >= states('input_number.emhass_power_threshold_w') | float(500) }}
+      - service: script.turn_off
+        target:
+          entity_id:
+            - script.sigen_restore_native_control
       - service: input_number.set_value
         target:
           entity_id: input_number.emhass_recovery_charge_w
@@ -942,6 +973,8 @@ automation:
             - script.sigen_restore_native_control
             - script.sigen_set_ems_mode
             - script.sigen_apply_discharge_limits
+            - script.sigen_start_recovery
+            - script.sigen_apply_active_recovery
       - service: script.sigen_restore_native_control
         data:
           reason: soc_floor

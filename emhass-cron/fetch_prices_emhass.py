@@ -106,7 +106,7 @@ USABLE_LOAD_QUALITIES = (
     LOAD_QUALITY_VALID_NOISE_CLAMP,
     LOAD_QUALITY_HELD_ESTIMATE,
 )
-MAX_HELD_LOAD_AGE_S = 300
+MAX_HELD_LOAD_AGE_S = 600
 LOAD_HISTORY_MAX_ATTEMPTS = 2
 LOAD_HISTORY_RETRY_DELAY_S = 90.0
 
@@ -724,6 +724,11 @@ def validate_native_load_history_with_retry(
     max_attempts: int = LOAD_HISTORY_MAX_ATTEMPTS,
     retry_delay_s: float = LOAD_HISTORY_RETRY_DELAY_S,
 ) -> dict[str, Any]:
+    now_dt = now or datetime.now(timezone.utc)
+    if now is None and now_dt.second < 4:
+        # Allow Home Assistant's on-the-minute trigger to commit the latest sample
+        time.sleep(4 - now_dt.second)
+
     last_exc: LoadHistoryError | None = None
     for attempt in range(1, max_attempts + 1):
         try:

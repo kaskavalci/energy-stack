@@ -2,6 +2,7 @@
 # Push EMHASS + Sigen Home Assistant packages (rendered from config/site.env).
 # Targets HA Container (Docker Compose), not HAOS Supervisor.
 set -euo pipefail
+unset CDPATH 2>/dev/null || true
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 WUD_ONLY=false

@@ -2,6 +2,7 @@
 # Source config/site.env for deploy and render scripts.
 # Usage: source "$(dirname "$0")/lib/source-site-env.sh"
 set -euo pipefail
+unset CDPATH 2>/dev/null || true
 
 _SOURCE_SITE_ENV_ROOT="${SOURCE_SITE_ENV_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 _SITE_ENV="${_SOURCE_SITE_ENV_ROOT}/config/site.env"
