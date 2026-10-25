@@ -65,6 +65,8 @@ def native_naive(prepared: pd.Series) -> pd.Series:
         periods=HORIZON,
         freq="30min",
     )
+    forecast.freq = pd.Timedelta("30min")
+    forecast.logger = logging.getLogger("emhass-load-gap-contract")
     result = forecast._get_load_forecast_naive(prepared.to_frame())
     if list(result.columns) != ["yhat"]:
         raise AssertionError(f"unexpected forecast columns: {list(result.columns)}")

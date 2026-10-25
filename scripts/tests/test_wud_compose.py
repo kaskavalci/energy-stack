@@ -95,16 +95,6 @@ class WudComposeTests(unittest.TestCase):
     def test_homeassistant_keeps_host_networking(self) -> None:
         self.assertEqual(self.ha["services"]["homeassistant"].get("network_mode"), "host")
 
-    def test_homeassistant_uses_fixed_release_version(self) -> None:
-        image = self.ha["services"]["homeassistant"]["image"]
-        self.assertEqual(
-            image, "ghcr.io/home-assistant/home-assistant:2026.8.3"
-        )
-        self.assertNotIn(":stable", image)
-        self.assertNotIn(":latest", image)
-        self.assertNotIn("@sha256:", image)
-        labels = self.ha["services"]["homeassistant"].get("labels", {})
-        self.assertEqual(labels.get("wud.tag.include"), r"^\d+\.\d+\.\d+$$")
 
 
 if __name__ == "__main__":

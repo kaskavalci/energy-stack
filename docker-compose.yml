@@ -43,7 +43,7 @@ services:
       - SIGENERGY2MQTT_MQTT_ANONYMOUS=true
 
   emhass:
-    image: ghcr.io/davidusb-geek/emhass:v0.18.1
+    image: ghcr.io/davidusb-geek/emhass:v0.18.7
     container_name: emhass
     restart: unless-stopped
     labels:

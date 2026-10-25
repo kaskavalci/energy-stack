@@ -1,5 +1,42 @@
 # Active Context
 
+## Image upgrades: Home Assistant 2026.10.4 & EMHASS v0.18.7 (2026-10-25)
+
+- Upgraded Home Assistant Container image pin from `2026.8.3` to `2026.10.4` in `home-assistant/docker-compose.yml`.
+- Upgraded EMHASS image pin from `v0.18.2` to `v0.18.7` in `docker-compose.yml`.
+- Ran EMHASS load-gap contract probe against candidate `ghcr.io/davidusb-geek/emhass:v0.18.7@sha256:d87a07cf21b91612b0ca6cfd6907f1cdd4e9e15951367754a9a5493fda758cf1`.
+  - Added `forecast.freq` and `forecast.logger` to mock `Forecast` object in `scripts/emhass_load_gap_contract.py` for upstream compatibility.
+  - Contract passed: `EMHASS_LOAD_GAP_CONTRACT_OK version=0.18.7 horizon=32 gap_bins=6 negative_control=pass`.
+  - Documented evidence in `docs/verification/emhass/v0.18.7-load-gap-contract.md`.
+- All tests passing: 116/116 cron unit tests, 173/173 scripts/tests.
+
+## EMHASS house load state-hold & 10m Envoy lag hardening — DEPLOYED & RECOVERED (2026-09-21)
+
+- MPC failed at 13:00 and 13:30 CEST with `Load history sample invalid: no_prior_valid`, making plan stale (>40m) and turning control off.
+- Root cause diagnosed:
+  1. In `home-assistant/ha_emhass_sensors.yaml`, `prev_valid_ts` and `prev_valid_w` were using `this.attributes` in the trigger's `variables:` block where `this` is undefined in Home Assistant. This prevented `held_estimate: envoy_update_lag` from activating, causing any negative balance dip (`raw_bal < -200 W`) to immediately drop to `invalid: no_prior_valid`.
+  2. The 5-minute hold limit was shorter than observed Envoy reporting delays (which reached 7 minutes during cloud transients).
+  3. Microsecond race condition at `:00`/`:30` cron boundaries caused cron to query HA history before the minute-boundary trigger had committed.
+- Fixes implemented:
+  - `home-assistant/ha_emhass_sensors.yaml`: replaced `this.attributes` in `variables:` with `state_attr('sensor.emhass_house_load_sample_w', ...)`, and extended `hold_age <= 300` to `hold_age <= 600` (10 minutes).
+  - `emhass-cron/fetch_prices_emhass.py`: increased `MAX_HELD_LOAD_AGE_S = 600` and added a settling delay at minute boundaries.
+  - Tests updated: 173/173 scripts/tests passed; 116/116 cron tests passed.
+- Deployed to Home Assistant (backup `energy-stack-20260921-143953`) and energy host (rebuilt `emhass-cron`, `energy-monitor`, restarted `emhass`).
+- Live verification:
+  - Manual MPC run succeeded (`Optimal`, published data to HA).
+  - Live HA sensors: `binary_sensor.emhass_mpc_fresh: on`, `binary_sensor.emhass_plan_valid: on`, `binary_sensor.emhass_control_allowed: on` (`block_reason: ok`).
+
+
+## Open-Meteo DNS blockage & DNS4EU cutover — RECOVERED (2026-09-17)
+
+- MPC failed starting 12:00 CEST due to Open-Meteo weather cache fetch failure (HTTP 500 / TypeError).
+- Root cause: local Pi-hole (192.168.0.31) was offline, router fell back to Quad9 (9.9.9.9 / 9.9.9.11) which falsely blocked `api.open-meteo.com` with RFC 8914 EDE 17 (Filtered).
+- Router upstream DNS was switched to DNS4EU (`86.54.11.13`, `86.54.11.213`).
+- Host & container resolution restored immediately to `94.130.142.35`.
+- Manual MPC executed at 14:04 CEST (`task-191`): weather cache refreshed, optimization solved (`Optimal`), 32-step plan published.
+- Live HA state: `emhass_mpc_fresh=on`, `emhass_plan_valid=on`, `emhass_control_allowed=on`.
+- Fixed `binary_sensor.emhass_house_load_valid`: removed inverted `device_class: safety` (which displayed `on` as "Unsafe"), added `icon: mdi:check-circle`. Deployed to HA (backup `energy-stack-20260917-141438`), verified `state: on` with `mdi:check-circle`.
+
 ## EMHASS load-sample template fix — HA DEPLOYED; MPC history backfill pending (2026-09-04)
 
 - Deployed the direct `states[entity_id]` freshness lookup fix to HA.
@@ -28,7 +65,7 @@
   synthetic history; the gap should leave the 32-bin window after about 14:00
   CEST if valid samples continue.
 
-## Temporary MPC horizon 12 — MPC RECOVERED; restoration required (2026-09-05)
+## Temporary MPC horizon 12 — restored to 32; full-window verification pending (2026-09-05)
 
 - Remote `/home/halil/workspace/energy-stack/emhass/share/config.json` was
   changed from `prediction_horizon: 32` to `12` with an atomic update.
@@ -37,13 +74,34 @@
   healthy load history `12/12`, weather refresh, optimization, and publish
   all succeeded. HA now reports `emhass_mpc_fresh=on` and
   `emhass_plan_valid=on`.
-- **Follow-up:** restore remote `prediction_horizon` to `32` after the native
-  history contains the full 32-bin window. Verify one full-horizon MPC run
-  with `mpc.ok=true`; keep the backup until that check passes.
+- Remote `prediction_horizon` was restored to `32` on 2026-09-05 with an atomic
+  update. Backup: `/home/halil/workspace/energy-stack/emhass/share/config.json.bak-before-horizon32-20260905T074114Z`.
+- Post-restore dry-run at 09:45 CEST confirmed `prediction_horizon_config=32`,
+  but failed closed because the effective 29-slot window had 23/29 native load
+  bins; the six missing bins were the leading 2026-09-04 17:30–20:00 UTC gap.
+  No synthetic history was written.
+- **Follow-up:** after the gap leaves the rolling window, run a full-horizon
+  MPC and verify `mpc.ok=true` with a current 32-configured plan. Keep both
+  horizon backups until that check passes.
 - Follow-up live check: the 08:00 CEST scheduled run succeeded with
   `mpc.ok=true`, `prediction_horizon=12`, and `12/12` healthy bins. HA reports
   `emhass_mpc_fresh=on` and `emhass_plan_valid=on`; the current EMHASS output
   contains 12 plan rows, so the day-ahead view is intentionally incomplete.
+
+## Low-SOC restore review hardening — HA DEPLOYED (2026-09-05)
+
+- Review found a fail-open risk if native restore selected the mode before
+  confirming that discharge had stopped, plus a race with recovery charging.
+- `sigen_restore_native_control` now writes and confirms a zero discharge limit
+  before selecting native mode. If confirmation fails, it stops without native
+  mode selection.
+- Recovery start preempts a late native restore. The SOC floor cutout preempts
+  recovery writers before its safety restore.
+- Focused package tests: 47/47 pass. HA deploy backup:
+  `/home/halil/homeassistant/config/backups/energy-stack-20260905-094127/`.
+- HA config check passed and the container restarted cleanly. Live state after
+  deploy: house-load valid, MPC fresh, plan valid, control allowed, recovery
+  off, native self-consumption, charge/discharge limits 8.8/9.0 kW.
 
 ## Low-SOC self-consumption restoration fix — HA DEPLOYED & VERIFIED (2026-09-05)
 

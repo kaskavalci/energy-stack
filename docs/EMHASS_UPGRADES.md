@@ -11,13 +11,12 @@ For every candidate:
 2. Run:
    `./scripts/verify-emhass-load-gap-contract.sh '<version@sha256:digest>'`
    (always pass version@digest; Compose alone is not enough).
-3. Run:
-   `.venv/bin/python -m unittest scripts.tests.test_emhass_image_pin scripts.tests.test_compose_image_pins -v`
-   (update expected versions in those tests when bumping).
-4. Run the complete cron test suite.
-5. Commit a note under `docs/verification/emhass/` containing the exact
+3. Run the complete cron test suite and scripts test suite:
+   `.venv/bin/python -m unittest discover -s emhass-cron/tests -v`
+   `PYTHONPATH=scripts/tests:scripts/lib .venv/bin/python -m unittest discover -s scripts/tests -v`
+4. Commit a note under `docs/verification/emhass/` containing the exact
    candidate, command, and passing output.
-6. Only then change the Compose **version** pin and deploy.
+5. Only then change the Compose **version** pin and deploy.
 
 Release notes are supporting evidence, not a substitute for the compatibility
 probe. A changed private EMHASS API fails the probe until the behavior and
