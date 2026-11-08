@@ -1,5 +1,16 @@
 # Active Context
 
+## Image upgrade: Home Assistant 2026.11.0 (2026-11-08)
+
+- Upgraded Home Assistant Container image pin from `2026.10.4` to `2026.11.0` in `home-assistant/docker-compose.yml`.
+- Breaking changes evaluated:
+  - Entity naming overhaul: underlying entity IDs, automations, scripts, templates, recorder, and EMHASS MPC unaffected.
+  - HACS transition: automatically migrated to core Marketplace (`Settings > Marketplace`).
+  - MQTT child devices & unique_id: 333/333 live MQTT entities have explicit `unique_id`s; P1 aliases define unique IDs.
+  - Enphase Envoy, Zonneplan, Daikin, Matter, sun triggers (offset 0), Telegram, and proxy/network all verified compatible.
+- Pre-upgrade validation: ran `hass --script check_config` with 2026.11.0 against live `/config` (exit code 0).
+- All tests passing: 116/116 cron unit tests, 168/168 scripts/tests.
+
 ## Image upgrades: Home Assistant 2026.10.4 & EMHASS v0.18.7 (2026-10-25)
 
 - Upgraded Home Assistant Container image pin from `2026.8.3` to `2026.10.4` in `home-assistant/docker-compose.yml`.
